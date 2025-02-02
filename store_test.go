@@ -13,7 +13,7 @@ import (
 func TestMain(m *testing.M) {
 	// Disable testcontainers logging
 	testcontainers.Logger = log.New(os.NewFile(0, os.DevNull), "", log.LstdFlags)
-	
+
 	// Run tests
 	os.Exit(m.Run())
 }
@@ -190,7 +190,7 @@ func TestInitializeSystemTables(t *testing.T) {
 
 	// Table should already exist since New() calls initializeSystemTables
 	tableName := GetSystemTableName(prefix, "namespaces")
-	
+
 	// Verify table exists
 	var exists bool
 	query := `
@@ -221,7 +221,7 @@ func TestInitializeSystemTables(t *testing.T) {
 		FROM information_schema.columns
 		WHERE table_name = $1
 		ORDER BY ordinal_position;`
-	
+
 	rows, err := db.QueryContext(ctx, query, tableName)
 	if err != nil {
 		t.Fatalf("failed to get table schema: %v", err)

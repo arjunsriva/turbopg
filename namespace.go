@@ -171,7 +171,7 @@ func (s *Store) CreateNamespace(ctx context.Context, namespace string, opts Crea
 			index_config = $3,
 			updated_at = NOW()`,
 		sysTable)
-	
+
 	_, err = s.db.ExecContext(ctx, query, namespace, opts.Dimensions, indexConfigJSON)
 	if err != nil {
 		return fmt.Errorf("write metadata: %w", err)
@@ -250,7 +250,7 @@ func (s *Store) DeleteNamespace(ctx context.Context, namespace string) error {
 		DELETE FROM %s 
 		WHERE namespace = $1`,
 		sysTable)
-	
+
 	_, err = s.db.ExecContext(ctx, query, namespace)
 	if err != nil {
 		return fmt.Errorf("delete metadata: %w", err)
@@ -267,14 +267,14 @@ func (s *Store) DeleteNamespace(ctx context.Context, namespace string) error {
 func (s *Store) ListNamespaces(ctx context.Context, opts ListNamespacesOptions) (*ListNamespacesResponse, error) {
 	// Build query to list namespaces from metadata table
 	sysTable := GetSystemTableName(s.prefix, "namespaces")
-	
+
 	// Base query
 	query := fmt.Sprintf(`
 		SELECT namespace 
 		FROM %s 
 		WHERE 1=1`,
 		sysTable)
-	
+
 	// Add prefix filter if specified
 	var args []interface{}
 	if opts.Prefix != "" {
@@ -284,7 +284,7 @@ func (s *Store) ListNamespaces(ctx context.Context, opts ListNamespacesOptions) 
 
 	// Add ordering
 	query += " ORDER BY namespace"
-	
+
 	// Get total count (including prefix filter)
 	var total int
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS t", query)
@@ -355,7 +355,7 @@ func (s *Store) GetNamespace(ctx context.Context, namespace string) (*Namespace,
 	// Get metadata from system table
 	sysTable := GetSystemTableName(s.prefix, "namespaces")
 	var (
-		dimensions   int
+		dimensions  int
 		indexConfig IndexConfig
 		configJSON  []byte
 	)
@@ -365,7 +365,7 @@ func (s *Store) GetNamespace(ctx context.Context, namespace string) (*Namespace,
 		FROM %s
 		WHERE namespace = $1`,
 		sysTable)
-	
+
 	err = s.db.QueryRowContext(ctx, query, namespace).Scan(&dimensions, &configJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {

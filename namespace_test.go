@@ -277,9 +277,9 @@ func TestListNamespaces(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "list all namespaces",
-			opts: ListNamespacesOptions{},
-			want: []string{"other", "vectors1", "vectors2"},
+			name:  "list all namespaces",
+			opts:  ListNamespacesOptions{},
+			want:  []string{"other", "vectors1", "vectors2"},
 			total: 3,
 		},
 		{
@@ -287,7 +287,7 @@ func TestListNamespaces(t *testing.T) {
 			opts: ListNamespacesOptions{
 				Prefix: "vectors",
 			},
-			want: []string{"vectors1", "vectors2"},
+			want:  []string{"vectors1", "vectors2"},
 			total: 2,
 		},
 		{
@@ -295,7 +295,7 @@ func TestListNamespaces(t *testing.T) {
 			opts: ListNamespacesOptions{
 				Limit: 2,
 			},
-			want: []string{"other", "vectors1"},
+			want:  []string{"other", "vectors1"},
 			total: 3,
 		},
 	}
