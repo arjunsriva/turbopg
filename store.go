@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/arjunsriva/turbopg/internal/pgdynmigrate"
+	"github.com/golang-migrate/migrate/v4"
 )
 
 // Config holds the configuration for the vector store
@@ -42,13 +43,20 @@ func New(db *sql.DB, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("create migrator: %w", err)
 	}
 
-	return &Store{
+	store := &Store{
 		db:       db,
 		prefix:   cfg.Prefix,
 		logger:   cfg.Logger,
 		dbURL:    cfg.DBURL,
 		migrator: m,
-	}, nil
+	}
+
+	// Initialize system tables
+	if err := store.initializeSystemTables(context.Background()); err != nil {
+		return nil, fmt.Errorf("initialize system tables: %w", err)
+	}
+
+	return store, nil
 }
 
 // NewDefault creates a new Store with default configuration
@@ -82,6 +90,32 @@ func Initialize(ctx context.Context, db *sql.DB) error {
 	err := db.QueryRowContext(ctx, "SELECT '[1,2,3]'::vector <-> '[4,5,6]'::vector < 100").Scan(&result)
 	if err != nil {
 		return fmt.Errorf("vector extension verification failed: %w", err)
+	}
+
+	return nil
+}
+
+// initializeSystemTables creates the necessary system tables for turbopg
+func (s *Store) initializeSystemTables(ctx context.Context) error {
+	// Create namespace metadata table
+	upSQL := fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			namespace TEXT PRIMARY KEY,
+			dimensions INTEGER NOT NULL,
+			index_config JSONB NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`, GetSystemTableName(s.prefix, "namespaces"))
+
+	downSQL := fmt.Sprintf(`
+		DROP TABLE IF EXISTS %s;`, GetSystemTableName(s.prefix, "namespaces"))
+
+	if err := s.migrator.Append(ctx, "create_system_tables", upSQL, downSQL); err != nil {
+		return fmt.Errorf("add system tables migration: %w", err)
+	}
+
+	if err := s.migrator.Up(ctx); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("run system tables migration: %w", err)
 	}
 
 	return nil

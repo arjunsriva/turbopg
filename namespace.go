@@ -2,6 +2,8 @@ package turbopg
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/arjunsriva/turbopg/internal/validation"
@@ -34,6 +36,32 @@ type CreateNamespaceOptions struct {
 	Dimensions int
 
 	// Optional: index configuration
+	IndexConfig *IndexConfig
+}
+
+// ListNamespacesOptions holds options for listing namespaces
+type ListNamespacesOptions struct {
+	// Optional prefix to filter namespaces by
+	Prefix string
+	// Maximum number of namespaces to return
+	Limit int
+}
+
+// ListNamespacesResponse holds the response from ListNamespaces
+type ListNamespacesResponse struct {
+	// List of namespaces
+	Namespaces []string
+	// Total number of namespaces (ignoring limit)
+	Total int
+}
+
+// Namespace represents a namespace and its configuration
+type Namespace struct {
+	// Name of the namespace
+	Name string
+	// Number of dimensions in vectors
+	Dimensions int
+	// Index configuration
 	IndexConfig *IndexConfig
 }
 
@@ -128,6 +156,27 @@ func (s *Store) CreateNamespace(ctx context.Context, namespace string, opts Crea
 		return fmt.Errorf("table %s was not created", tableName)
 	}
 
+	// Write metadata to system table
+	sysTable := GetSystemTableName(s.prefix, "namespaces")
+	indexConfigJSON, err := json.Marshal(indexConfig)
+	if err != nil {
+		return fmt.Errorf("marshal index config: %w", err)
+	}
+
+	query = fmt.Sprintf(`
+		INSERT INTO %s (namespace, dimensions, index_config, created_at, updated_at)
+		VALUES ($1, $2, $3, NOW(), NOW())
+		ON CONFLICT (namespace) DO UPDATE SET
+			dimensions = $2,
+			index_config = $3,
+			updated_at = NOW()`,
+		sysTable)
+	
+	_, err = s.db.ExecContext(ctx, query, namespace, opts.Dimensions, indexConfigJSON)
+	if err != nil {
+		return fmt.Errorf("write metadata: %w", err)
+	}
+
 	s.logger.Info("created namespace",
 		Field{Key: "namespace", Value: namespace},
 		Field{Key: "dimensions", Value: opts.Dimensions},
@@ -195,9 +244,144 @@ func (s *Store) DeleteNamespace(ctx context.Context, namespace string) error {
 		return fmt.Errorf("run migration: %w", err)
 	}
 
+	// Delete metadata from system table
+	sysTable := GetSystemTableName(s.prefix, "namespaces")
+	query = fmt.Sprintf(`
+		DELETE FROM %s 
+		WHERE namespace = $1`,
+		sysTable)
+	
+	_, err = s.db.ExecContext(ctx, query, namespace)
+	if err != nil {
+		return fmt.Errorf("delete metadata: %w", err)
+	}
+
 	s.logger.Info("deleted namespace",
 		Field{Key: "namespace", Value: namespace},
 	)
 
 	return nil
+}
+
+// ListNamespaces lists all namespaces in the store
+func (s *Store) ListNamespaces(ctx context.Context, opts ListNamespacesOptions) (*ListNamespacesResponse, error) {
+	// Build query to list namespaces from metadata table
+	sysTable := GetSystemTableName(s.prefix, "namespaces")
+	
+	// Base query
+	query := fmt.Sprintf(`
+		SELECT namespace 
+		FROM %s 
+		WHERE 1=1`,
+		sysTable)
+	
+	// Add prefix filter if specified
+	var args []interface{}
+	if opts.Prefix != "" {
+		args = append(args, opts.Prefix+"%")
+		query += fmt.Sprintf(" AND namespace LIKE $%d", len(args))
+	}
+
+	// Add ordering
+	query += " ORDER BY namespace"
+	
+	// Get total count (including prefix filter)
+	var total int
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS t", query)
+	err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total)
+	if err != nil {
+		return nil, fmt.Errorf("count namespaces: %w", err)
+	}
+
+	// Add limit if specified
+	if opts.Limit > 0 {
+		args = append(args, opts.Limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+
+	// Execute query
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list namespaces: %w", err)
+	}
+	defer rows.Close()
+
+	// Extract namespace names
+	var namespaces []string
+	for rows.Next() {
+		var namespace string
+		if err := rows.Scan(&namespace); err != nil {
+			return nil, fmt.Errorf("scan namespace: %w", err)
+		}
+		namespaces = append(namespaces, namespace)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate namespaces: %w", err)
+	}
+
+	return &ListNamespacesResponse{
+		Namespaces: namespaces,
+		Total:      total,
+	}, nil
+}
+
+// GetNamespace gets information about a specific namespace
+func (s *Store) GetNamespace(ctx context.Context, namespace string) (*Namespace, error) {
+	// Validate namespace name
+	if err := validation.ValidateNamespace(namespace); err != nil {
+		return nil, fmt.Errorf("invalid namespace name: %w", err)
+	}
+
+	// Build table name
+	tableName := GetNamespaceTableName(s.prefix, namespace)
+
+	// First check if the table exists
+	var exists bool
+	query := `
+		SELECT EXISTS (
+			SELECT FROM pg_tables
+			WHERE schemaname = 'public'
+			AND tablename = $1
+		)`
+	err := s.db.QueryRowContext(ctx, query, tableName).Scan(&exists)
+	if err != nil {
+		return nil, fmt.Errorf("check table existence: %w", err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("namespace %q does not exist", namespace)
+	}
+
+	// Get metadata from system table
+	sysTable := GetSystemTableName(s.prefix, "namespaces")
+	var (
+		dimensions   int
+		indexConfig IndexConfig
+		configJSON  []byte
+	)
+
+	query = fmt.Sprintf(`
+		SELECT dimensions, index_config
+		FROM %s
+		WHERE namespace = $1`,
+		sysTable)
+	
+	err = s.db.QueryRowContext(ctx, query, namespace).Scan(&dimensions, &configJSON)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("namespace %q metadata not found", namespace)
+		}
+		return nil, fmt.Errorf("get metadata: %w", err)
+	}
+
+	err = json.Unmarshal(configJSON, &indexConfig)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal index config: %w", err)
+	}
+
+	return &Namespace{
+		Name:        namespace,
+		Dimensions:  dimensions,
+		IndexConfig: &indexConfig,
+	}, nil
 }

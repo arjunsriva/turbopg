@@ -3,6 +3,7 @@ package turbopg
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -224,6 +225,181 @@ func TestDeleteNamespace(t *testing.T) {
 			}
 			if exists {
 				t.Error("indexes still exist after deletion")
+			}
+		})
+	}
+}
+
+func TestListNamespaces(t *testing.T) {
+	// Setup test database and initialize
+	db := setupTestDB(t)
+	defer db.cleanup(t)
+
+	ctx := context.Background()
+	if err := Initialize(ctx, db.DB); err != nil {
+		t.Fatalf("failed to initialize database: %v", err)
+	}
+
+	// Create store with prefix
+	prefix := "test"
+	store, err := New(db.DB, Config{
+		Prefix: prefix,
+		DBURL:  db.DatabaseURL(t),
+	})
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	// Create some test namespaces
+	namespaces := []struct {
+		name string
+		dims int
+	}{
+		{"vectors1", 128},
+		{"vectors2", 256},
+		{"other", 512},
+	}
+
+	for _, ns := range namespaces {
+		err := store.CreateNamespace(ctx, ns.name, CreateNamespaceOptions{
+			Dimensions: ns.dims,
+		})
+		if err != nil {
+			t.Fatalf("failed to create namespace %q: %v", ns.name, err)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		opts    ListNamespacesOptions
+		want    []string
+		total   int
+		wantErr bool
+	}{
+		{
+			name: "list all namespaces",
+			opts: ListNamespacesOptions{},
+			want: []string{"other", "vectors1", "vectors2"},
+			total: 3,
+		},
+		{
+			name: "list with prefix filter",
+			opts: ListNamespacesOptions{
+				Prefix: "vectors",
+			},
+			want: []string{"vectors1", "vectors2"},
+			total: 2,
+		},
+		{
+			name: "list with limit",
+			opts: ListNamespacesOptions{
+				Limit: 2,
+			},
+			want: []string{"other", "vectors1"},
+			total: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := store.ListNamespaces(ctx, tt.opts)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ListNamespaces() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				return
+			}
+
+			if got.Total != tt.total {
+				t.Errorf("ListNamespaces() total = %v, want %v", got.Total, tt.total)
+			}
+
+			if !reflect.DeepEqual(got.Namespaces, tt.want) {
+				t.Errorf("ListNamespaces() namespaces = %v, want %v", got.Namespaces, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetNamespace(t *testing.T) {
+	// Setup test database and initialize
+	db := setupTestDB(t)
+	defer db.cleanup(t)
+
+	ctx := context.Background()
+	if err := Initialize(ctx, db.DB); err != nil {
+		t.Fatalf("failed to initialize database: %v", err)
+	}
+
+	// Create store with prefix
+	prefix := "test"
+	store, err := New(db.DB, Config{
+		Prefix: prefix,
+		DBURL:  db.DatabaseURL(t),
+	})
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	// Create a test namespace with custom config
+	err = store.CreateNamespace(ctx, "vectors", CreateNamespaceOptions{
+		Dimensions: 128,
+		IndexConfig: &IndexConfig{
+			DistanceMetric: "euclidean_squared",
+			Lists:          200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create test namespace: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		namespace string
+		want      *Namespace
+		wantErr   bool
+	}{
+		{
+			name:      "get existing namespace",
+			namespace: "vectors",
+			want: &Namespace{
+				Name:       "vectors",
+				Dimensions: 128,
+				IndexConfig: &IndexConfig{
+					DistanceMetric: "euclidean_squared",
+					Lists:          200,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:      "get non-existent namespace",
+			namespace: "not_exists",
+			want:      nil,
+			wantErr:   true,
+		},
+		{
+			name:      "get invalid namespace name",
+			namespace: "pg_test",
+			want:      nil,
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := store.GetNamespace(ctx, tt.namespace)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GetNamespace() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				return
+			}
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("GetNamespace() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
