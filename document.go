@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/arjunsriva/turbopg/internal/validation"
@@ -396,4 +397,246 @@ func (s *Store) DeleteByFilter(ctx context.Context, namespace string, filter Fil
 	)
 
 	return nil
+}
+
+// QueryResult represents a single search result with its score
+type QueryResult struct {
+	// Document that matched the query
+	Document Document
+
+	// Score represents the similarity/distance score
+	// Lower is better for distance metrics (L2)
+	// Higher is better for similarity metrics (cosine)
+	Score float64
+}
+
+// SearchVector finds the top-K most similar vectors in a namespace
+func (s *Store) SearchVector(ctx context.Context, namespace string, vector []float32, topK int, metric string) ([]QueryResult, error) {
+	// Validate namespace
+	ns, err := s.GetNamespace(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate vector dimensions
+	if len(vector) != ns.Dimensions {
+		return nil, fmt.Errorf("vector dimensions mismatch: got %d, want %d", len(vector), ns.Dimensions)
+	}
+
+	// Validate topK
+	if topK <= 0 {
+		return nil, fmt.Errorf("topK must be positive, got %d", topK)
+	}
+
+	// Choose operator based on metric
+	var operator string
+	switch metric {
+	case "cosine":
+		operator = "<->"
+	case "euclidean":
+		operator = "<->"
+	case "euclidean_squared":
+		operator = "<#>"
+	default:
+		return nil, fmt.Errorf("unsupported distance metric: %s", metric)
+	}
+
+	// Build table name
+	tableName := GetNamespaceTableName(s.prefix, namespace)
+
+	// Build query
+	query := fmt.Sprintf(`
+		SELECT id, vector, attributes, (vector %s $1) as distance
+		FROM %s
+		ORDER BY vector %s $1
+		LIMIT $2`,
+		operator, tableName, operator)
+
+	// Convert vector to string format that pgvector expects: [1,2,3]
+	vectorStr := fmt.Sprintf("[%s]", joinFloat32s(vector, ","))
+
+	// Execute query
+	rows, err := s.db.QueryContext(ctx, query, vectorStr, topK)
+	if err != nil {
+		return nil, fmt.Errorf("execute search: %w", err)
+	}
+	defer rows.Close()
+
+	// Parse results
+	var results []QueryResult
+	for rows.Next() {
+		var (
+			doc       Document
+			vectorStr string
+			attrsJSON []byte
+			distance  float64
+		)
+
+		err := rows.Scan(&doc.ID, &vectorStr, &attrsJSON, &distance)
+		if err != nil {
+			return nil, fmt.Errorf("scan result: %w", err)
+		}
+
+		// Parse vector string back to []float32
+		// Remove brackets and split by comma
+		vectorStr = strings.Trim(vectorStr, "[]")
+		if vectorStr != "" {
+			parts := strings.Split(vectorStr, ",")
+			doc.Vector = make([]float32, len(parts))
+			for i, p := range parts {
+				val, err := strconv.ParseFloat(strings.TrimSpace(p), 32)
+				if err != nil {
+					return nil, fmt.Errorf("parse vector value: %w", err)
+				}
+				doc.Vector[i] = float32(val)
+			}
+		}
+
+		// Parse attributes JSON
+		if err := json.Unmarshal(attrsJSON, &doc.Attributes); err != nil {
+			return nil, fmt.Errorf("unmarshal attributes: %w", err)
+		}
+
+		results = append(results, QueryResult{
+			Document: doc,
+			Score:    distance,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate results: %w", err)
+	}
+
+	s.logger.Info("vector search completed",
+		Field{Key: "namespace", Value: namespace},
+		Field{Key: "top_k", Value: topK},
+		Field{Key: "metric", Value: metric},
+		Field{Key: "results", Value: len(results)},
+	)
+
+	return results, nil
+}
+
+// SearchFiltered finds the top-K most similar vectors that match the given filter
+func (s *Store) SearchFiltered(ctx context.Context, namespace string, vector []float32, filter Filter, topK int, metric string) ([]QueryResult, error) {
+	// Validate namespace
+	ns, err := s.GetNamespace(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate vector dimensions
+	if len(vector) != ns.Dimensions {
+		return nil, fmt.Errorf("vector dimensions mismatch: got %d, want %d", len(vector), ns.Dimensions)
+	}
+
+	// Validate topK
+	if topK <= 0 {
+		return nil, fmt.Errorf("topK must be positive, got %d", topK)
+	}
+
+	// Choose operator based on metric
+	var operator string
+	switch metric {
+	case "cosine":
+		operator = "<=>"
+	case "euclidean":
+		operator = "<->"
+	case "euclidean_squared":
+		operator = "<#>"
+	default:
+		return nil, fmt.Errorf("unsupported distance metric: %s", metric)
+	}
+
+	// Build table name
+	tableName := GetNamespaceTableName(s.prefix, namespace)
+
+	// Build query with filter
+	var query string
+	switch filter.Op {
+	case "<", ">", "<=", ">=":
+		// For numeric comparisons, cast the JSONB value to numeric
+		query = fmt.Sprintf(`
+			SELECT id, vector, attributes, (vector %s $1) as distance
+			FROM %s
+			WHERE (attributes->>'%s')::numeric %s $2
+			ORDER BY vector %s $1
+			LIMIT $3`,
+			operator, tableName, filter.Field, filter.Op, operator)
+	default:
+		// For equality and other operators, use direct comparison
+		query = fmt.Sprintf(`
+			SELECT id, vector, attributes, (vector %s $1) as distance
+			FROM %s
+			WHERE attributes->>'%s' %s $2
+			ORDER BY vector %s $1
+			LIMIT $3`,
+			operator, tableName, filter.Field, filter.Op, operator)
+	}
+
+	// Convert vector to string format that pgvector expects: [1,2,3]
+	vectorStr := fmt.Sprintf("[%s]", joinFloat32s(vector, ","))
+
+	// Execute query
+	rows, err := s.db.QueryContext(ctx, query, vectorStr, filter.Value, topK)
+	if err != nil {
+		return nil, fmt.Errorf("execute search: %w", err)
+	}
+	defer rows.Close()
+
+	// Parse results
+	var results []QueryResult
+	for rows.Next() {
+		var (
+			doc       Document
+			vectorStr string
+			attrsJSON []byte
+			distance  float64
+		)
+
+		err := rows.Scan(&doc.ID, &vectorStr, &attrsJSON, &distance)
+		if err != nil {
+			return nil, fmt.Errorf("scan result: %w", err)
+		}
+
+		// Parse vector string back to []float32
+		// Remove brackets and split by comma
+		vectorStr = strings.Trim(vectorStr, "[]")
+		if vectorStr != "" {
+			parts := strings.Split(vectorStr, ",")
+			doc.Vector = make([]float32, len(parts))
+			for i, p := range parts {
+				val, err := strconv.ParseFloat(strings.TrimSpace(p), 32)
+				if err != nil {
+					return nil, fmt.Errorf("parse vector value: %w", err)
+				}
+				doc.Vector[i] = float32(val)
+			}
+		}
+
+		// Parse attributes JSON
+		if err := json.Unmarshal(attrsJSON, &doc.Attributes); err != nil {
+			return nil, fmt.Errorf("unmarshal attributes: %w", err)
+		}
+
+		results = append(results, QueryResult{
+			Document: doc,
+			Score:    distance,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate results: %w", err)
+	}
+
+	s.logger.Info("filtered vector search completed",
+		Field{Key: "namespace", Value: namespace},
+		Field{Key: "top_k", Value: topK},
+		Field{Key: "metric", Value: metric},
+		Field{Key: "filter_field", Value: filter.Field},
+		Field{Key: "filter_op", Value: filter.Op},
+		Field{Key: "results", Value: len(results)},
+	)
+
+	return results, nil
 }
