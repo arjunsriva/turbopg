@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // UpsertOptions holds options for document upsert operations
@@ -93,7 +92,7 @@ func (s *Store) Upsert(ctx context.Context, docs []Document, opts UpsertOptions)
 	// Execute upserts
 	for _, doc := range docs {
 		// Convert vector to string format that pgvector expects: [1,2,3]
-		vectorStr := fmt.Sprintf("[%s]", joinFloat32s(doc.Vector, ","))
+		vectorStr := VectorToString(doc.Vector)
 
 		// Convert attributes to JSON
 		attrsJSON, err := json.Marshal(doc.Attributes)
@@ -119,21 +118,6 @@ func (s *Store) Upsert(ctx context.Context, docs []Document, opts UpsertOptions)
 	)
 
 	return nil
-}
-
-// joinFloat32s joins float32 values with a separator
-func joinFloat32s(values []float32, sep string) string {
-	if len(values) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("%g", values[0]))
-	for _, v := range values[1:] {
-		b.WriteString(sep)
-		b.WriteString(fmt.Sprintf("%g", v))
-	}
-	return b.String()
 }
 
 // UpsertBatch inserts or updates documents in batches
@@ -206,7 +190,7 @@ func (s *Store) UpsertBatch(ctx context.Context, docs []Document, opts BatchUpse
 		// Execute batch
 		for _, doc := range batch {
 			// Convert vector to string format that pgvector expects: [1,2,3]
-			vectorStr := fmt.Sprintf("[%s]", joinFloat32s(doc.Vector, ","))
+			vectorStr := VectorToString(doc.Vector)
 
 			// Convert attributes to JSON
 			attrsJSON, err := json.Marshal(doc.Attributes)

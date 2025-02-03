@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/arjunsriva/turbopg/internal/pgdynmigrate"
 	"github.com/golang-migrate/migrate/v4"
@@ -146,28 +144,4 @@ func (s *Store) executeQueryAndParse(ctx context.Context, query string, args []i
 		return nil, fmt.Errorf("iterate results: %w", err)
 	}
 	return results, nil
-}
-
-// VectorToString converts a vector to the pgvector string format
-func VectorToString(vector []float32) string {
-	return fmt.Sprintf("[%s]", joinFloat32s(vector, ","))
-}
-
-// StringToVector converts a pgvector string format back to a vector
-func StringToVector(vectorStr string) ([]float32, error) {
-	vectorStr = strings.Trim(vectorStr, "[]")
-	if vectorStr == "" {
-		return nil, nil
-	}
-	
-	parts := strings.Split(vectorStr, ",")
-	vector := make([]float32, len(parts))
-	for i, p := range parts {
-		val, err := strconv.ParseFloat(strings.TrimSpace(p), 32)
-		if err != nil {
-			return nil, fmt.Errorf("parse vector value: %w", err)
-		}
-		vector[i] = float32(val)
-	}
-	return vector, nil
 }
