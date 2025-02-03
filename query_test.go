@@ -7,27 +7,12 @@ import (
 )
 
 func TestSearchVector(t *testing.T) {
-	// Setup test database
-	db := setupTestDB(t)
-
-	// Initialize database
-	ctx := context.Background()
-	if err := Initialize(ctx, db.DB); err != nil {
-		t.Fatalf("failed to initialize database: %v", err)
-	}
-
-	// Create store with prefix
-	store, err := New(db.DB, Config{
-		Prefix: "test",
-		DBURL:  db.DatabaseURL(t),
-	})
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
+	store, db, ctx := SetupTestStore(t, "test_query", true)
+	defer db.cleanup(t)
 
 	// Create test namespace
 	ns := "test_search"
-	err = store.CreateNamespace(ctx, ns, CreateNamespaceOptions{
+	err := store.CreateNamespace(ctx, ns, CreateNamespaceOptions{
 		Dimensions: 4,
 		IndexConfig: &IndexConfig{
 			DistanceMetric: "cosine_distance",
@@ -40,35 +25,12 @@ func TestSearchVector(t *testing.T) {
 
 	// Insert test documents
 	docs := []Document{
-		{
-			ID:     "doc1",
-			Vector: []float32{1, 0, 0, 0}, // Base vector
-			Attributes: map[string]interface{}{
-				"name": "document 1",
-			},
-		},
-		{
-			ID:     "doc2",
-			Vector: []float32{0.9, 0.1, 0, 0}, // Similar to doc1
-			Attributes: map[string]interface{}{
-				"name": "document 2",
-			},
-		},
-		{
-			ID:     "doc3",
-			Vector: []float32{0, 1, 0, 0}, // Different direction
-			Attributes: map[string]interface{}{
-				"name": "document 3",
-			},
-		},
-		{
-			ID:     "doc4",
-			Vector: []float32{0, 0, 1, 0}, // Orthogonal
-			Attributes: map[string]interface{}{
-				"name": "document 4",
-			},
-		},
+		NewTestDocument("doc1", []float32{1, 0, 0, 0}, map[string]interface{}{"name": "document 1"}),
+		NewTestDocument("doc2", []float32{0.9, 0.1, 0, 0}, map[string]interface{}{"name": "document 2"}),
+		NewTestDocument("doc3", []float32{0, 1, 0, 0}, map[string]interface{}{"name": "document 3"}),
+		NewTestDocument("doc4", []float32{0, 0, 1, 0}, map[string]interface{}{"name": "document 4"}),
 	}
+
 	if err := store.Upsert(ctx, docs, UpsertOptions{Namespace: ns}); err != nil {
 		t.Fatalf("failed to insert test documents: %v", err)
 	}
@@ -146,26 +108,12 @@ func TestSearchVector(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			results, err := store.SearchVector(ctx, tt.namespace, tt.vector, tt.topK, tt.metric)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("SearchVector() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
+			AssertError(t, err, tt.wantErr, tt.name)
 			if err != nil {
 				return
 			}
 
-			// Check number of results
-			if len(results) != len(tt.wantIDs) {
-				t.Errorf("SearchVector() got %d results, want %d", len(results), len(tt.wantIDs))
-				return
-			}
-
-			// Check result order
-			for i, want := range tt.wantIDs {
-				if results[i].Document.ID != want {
-					t.Errorf("SearchVector() result %d got ID %s, want %s", i, results[i].Document.ID, want)
-				}
-			}
+			AssertQueryResultIDs(t, results, tt.wantIDs, tt.name)
 
 			// Verify scores are in correct order (ascending for distance metrics)
 			for i := 1; i < len(results); i++ {
@@ -178,27 +126,12 @@ func TestSearchVector(t *testing.T) {
 }
 
 func TestSearchFiltered(t *testing.T) {
-	// Setup test database
-	db := setupTestDB(t)
-
-	// Initialize database
-	ctx := context.Background()
-	if err := Initialize(ctx, db.DB); err != nil {
-		t.Fatalf("failed to initialize database: %v", err)
-	}
-
-	// Create store with prefix
-	store, err := New(db.DB, Config{
-		Prefix: "test",
-		DBURL:  db.DatabaseURL(t),
-	})
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
+	store, db, ctx := SetupTestStore(t, "test_filter", true)
+	defer db.cleanup(t)
 
 	// Create test namespace
 	ns := "test_search_filtered"
-	err = store.CreateNamespace(ctx, ns, CreateNamespaceOptions{
+	err := store.CreateNamespace(ctx, ns, CreateNamespaceOptions{
 		Dimensions: 4,
 		IndexConfig: &IndexConfig{
 			DistanceMetric: "cosine_distance",
@@ -211,43 +144,28 @@ func TestSearchFiltered(t *testing.T) {
 
 	// Insert test documents with various attributes
 	docs := []Document{
-		{
-			ID:     "doc1",
-			Vector: []float32{1, 0, 0, 0},
-			Attributes: map[string]interface{}{
-				"category": "electronics",
-				"price":    100,
-				"inStock":  true,
-			},
-		},
-		{
-			ID:     "doc2",
-			Vector: []float32{0.9, 0.1, 0, 0},
-			Attributes: map[string]interface{}{
-				"category": "electronics",
-				"price":    200,
-				"inStock":  false,
-			},
-		},
-		{
-			ID:     "doc3",
-			Vector: []float32{0, 1, 0, 0},
-			Attributes: map[string]interface{}{
-				"category": "books",
-				"price":    20,
-				"inStock":  true,
-			},
-		},
-		{
-			ID:     "doc4",
-			Vector: []float32{0, 0, 1, 0},
-			Attributes: map[string]interface{}{
-				"category": "books",
-				"price":    15,
-				"inStock":  true,
-			},
-		},
+		NewTestDocument("doc1", []float32{1, 0, 0, 0}, map[string]interface{}{
+			"category": "electronics",
+			"price":    100,
+			"inStock":  true,
+		}),
+		NewTestDocument("doc2", []float32{0.9, 0.1, 0, 0}, map[string]interface{}{
+			"category": "electronics",
+			"price":    200,
+			"inStock":  false,
+		}),
+		NewTestDocument("doc3", []float32{0, 1, 0, 0}, map[string]interface{}{
+			"category": "books",
+			"price":    20,
+			"inStock":  true,
+		}),
+		NewTestDocument("doc4", []float32{0, 0, 1, 0}, map[string]interface{}{
+			"category": "books",
+			"price":    15,
+			"inStock":  true,
+		}),
 	}
+
 	if err := store.Upsert(ctx, docs, UpsertOptions{Namespace: ns}); err != nil {
 		t.Fatalf("failed to insert test documents: %v", err)
 	}
@@ -375,26 +293,12 @@ func TestSearchFiltered(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			results, err := store.SearchFiltered(ctx, tt.namespace, tt.vector, tt.filter, tt.topK, tt.metric)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("SearchFiltered() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
+			AssertError(t, err, tt.wantErr, tt.name)
 			if err != nil {
 				return
 			}
 
-			// Check number of results
-			if len(results) != len(tt.wantIDs) {
-				t.Errorf("SearchFiltered() got %d results, want %d", len(results), len(tt.wantIDs))
-				return
-			}
-
-			// Check result order
-			for i, want := range tt.wantIDs {
-				if results[i].Document.ID != want {
-					t.Errorf("SearchFiltered() result %d got ID %s, want %s", i, results[i].Document.ID, want)
-				}
-			}
+			AssertQueryResultIDs(t, results, tt.wantIDs, tt.name)
 
 			// Verify scores are in correct order (ascending for distance metrics)
 			for i := 1; i < len(results); i++ {

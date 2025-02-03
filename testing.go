@@ -186,3 +186,64 @@ func NewTestStore(t *testing.T, prefix string) (*Store, testcontainers.Container
 	}
 	return store, db.container
 }
+
+// AssertError checks if an error occurred as expected in tests.
+func AssertError(t *testing.T, err error, wantErr bool, testName string) {
+	t.Helper()
+	if (err != nil) != wantErr {
+		t.Errorf("%s: error = %v, wantErr %v", testName, err, wantErr)
+		t.FailNow() // Stop test execution if error assertion fails
+	}
+	if err != nil && !wantErr {
+		t.Fatalf("%s: unexpected error: %v", testName, err) // Fail hard on unexpected error
+	}
+}
+
+// SetupTestStore creates a new Store instance and TestDB for testing,
+// handling common setup steps.
+func SetupTestStore(t *testing.T, prefix string, withLogger bool) (*Store, *TestDB, context.Context) {
+	t.Helper()
+	db := setupTestDB(t)
+	ctx := context.Background()
+	if err := Initialize(ctx, db.DB); err != nil {
+		t.Fatalf("failed to initialize database: %v", err)
+	}
+
+	var logger Logger
+	if withLogger {
+		logger = &testLogger{t: t}
+	}
+
+	store, err := New(db.DB, Config{
+		Prefix: prefix,
+		DBURL:  db.DatabaseURL(t),
+		Logger: logger,
+	})
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	return store, db, ctx
+}
+
+// AssertQueryResultIDs checks if the result document IDs match the expected IDs in order.
+func AssertQueryResultIDs(t *testing.T, results []QueryResult, wantIDs []DocumentID, testName string) {
+	t.Helper()
+	if len(results) != len(wantIDs) {
+		t.Errorf("%s: got %d results, want %d", testName, len(results), len(wantIDs))
+		return
+	}
+	for i, want := range wantIDs {
+		if results[i].Document.ID != want {
+			t.Errorf("%s: result %d got ID %s, want %s", testName, i, results[i].Document.ID, want)
+		}
+	}
+}
+
+// NewTestDocument creates a Document struct with default or provided values.
+func NewTestDocument(id DocumentID, vector []float32, attributes map[string]interface{}) Document {
+	return Document{
+		ID:         id,
+		Vector:     vector,
+		Attributes: attributes,
+	}
+}
