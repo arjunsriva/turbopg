@@ -2,9 +2,9 @@ package turbopg
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -85,18 +85,10 @@ func (s *Store) SearchVector(ctx context.Context, namespace string, vector []flo
 		operator, tableName, operator)
 
 	// Convert vector to string format that pgvector expects: [1,2,3]
-	vectorStr := fmt.Sprintf("[%s]", joinFloat32s(vector, ","))
+	vectorStr := VectorToString(vector)
 
-	// Execute query
-	rows, err := s.db.QueryContext(ctx, query, vectorStr, topK)
-	if err != nil {
-		return nil, fmt.Errorf("execute search: %w", err)
-	}
-	defer rows.Close()
-
-	// Parse results
-	var results []QueryResult
-	for rows.Next() {
+	// Execute query and parse results
+	results, err := s.executeQueryAndParse(ctx, query, []interface{}{vectorStr, topK}, func(rows *sql.Rows) (*QueryResult, error) {
 		var (
 			doc       Document
 			vectorStr string
@@ -104,39 +96,29 @@ func (s *Store) SearchVector(ctx context.Context, namespace string, vector []flo
 			distance  float64
 		)
 
-		err := rows.Scan(&doc.ID, &vectorStr, &attrsJSON, &distance)
-		if err != nil {
+		if err := rows.Scan(&doc.ID, &vectorStr, &attrsJSON, &distance); err != nil {
 			return nil, fmt.Errorf("scan result: %w", err)
 		}
 
-		// Parse vector string back to []float32
-		// Remove brackets and split by comma
-		vectorStr = strings.Trim(vectorStr, "[]")
-		if vectorStr != "" {
-			parts := strings.Split(vectorStr, ",")
-			doc.Vector = make([]float32, len(parts))
-			for i, p := range parts {
-				val, err := strconv.ParseFloat(strings.TrimSpace(p), 32)
-				if err != nil {
-					return nil, fmt.Errorf("parse vector value: %w", err)
-				}
-				doc.Vector[i] = float32(val)
-			}
+		// Parse vector
+		doc.Vector, err = StringToVector(vectorStr)
+		if err != nil {
+			return nil, err
 		}
 
-		// Parse attributes JSON
+		// Parse attributes
 		if err := json.Unmarshal(attrsJSON, &doc.Attributes); err != nil {
 			return nil, fmt.Errorf("unmarshal attributes: %w", err)
 		}
 
-		results = append(results, QueryResult{
+		return &QueryResult{
 			Document: doc,
 			Score:    distance,
-		})
-	}
+		}, nil
+	})
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate results: %w", err)
+	if err != nil {
+		return nil, err
 	}
 
 	s.logger.Info("vector search completed",
@@ -219,7 +201,7 @@ func (s *Store) Query(ctx context.Context, opts QueryOptions) ([]QueryResult, er
 	var argOffset int
 
 	if opts.Vector != nil {
-		vectorStr := fmt.Sprintf("[%s]", joinFloat32s(opts.Vector, ","))
+		vectorStr := VectorToString(opts.Vector)
 		args = append(args, vectorStr)
 		argOffset = 1
 		s.logger.Info("added vector argument",
@@ -268,15 +250,9 @@ func (s *Store) Query(ctx context.Context, opts QueryOptions) ([]QueryResult, er
 		Field{Key: "query", Value: queryBuilder.String()},
 		Field{Key: "args", Value: fmt.Sprintf("%v", args)},
 	)
-	rows, err := s.db.QueryContext(ctx, queryBuilder.String(), args...)
-	if err != nil {
-		return nil, fmt.Errorf("execute query: %w", err)
-	}
-	defer rows.Close()
 
-	// Parse results
-	var results []QueryResult
-	for rows.Next() {
+	// Execute query and parse results
+	results, err := s.executeQueryAndParse(ctx, queryBuilder.String(), args, func(rows *sql.Rows) (*QueryResult, error) {
 		var (
 			doc       Document
 			vectorStr string
@@ -284,23 +260,14 @@ func (s *Store) Query(ctx context.Context, opts QueryOptions) ([]QueryResult, er
 			distance  float64
 		)
 
-		err := rows.Scan(&doc.ID, &vectorStr, &attrsJSON, &distance)
-		if err != nil {
+		if err := rows.Scan(&doc.ID, &vectorStr, &attrsJSON, &distance); err != nil {
 			return nil, fmt.Errorf("scan result: %w", err)
 		}
 
 		// Parse vector
-		vectorStr = strings.Trim(vectorStr, "[]")
-		if vectorStr != "" {
-			parts := strings.Split(vectorStr, ",")
-			doc.Vector = make([]float32, len(parts))
-			for i, p := range parts {
-				val, err := strconv.ParseFloat(strings.TrimSpace(p), 32)
-				if err != nil {
-					return nil, fmt.Errorf("parse vector value: %w", err)
-				}
-				doc.Vector[i] = float32(val)
-			}
+		doc.Vector, err = StringToVector(vectorStr)
+		if err != nil {
+			return nil, err
 		}
 
 		// Parse attributes
@@ -308,14 +275,14 @@ func (s *Store) Query(ctx context.Context, opts QueryOptions) ([]QueryResult, er
 			return nil, fmt.Errorf("unmarshal attributes: %w", err)
 		}
 
-		results = append(results, QueryResult{
+		return &QueryResult{
 			Document: doc,
 			Score:    distance,
-		})
-	}
+		}, nil
+	})
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate results: %w", err)
+	if err != nil {
+		return nil, err
 	}
 
 	s.logger.Info("query completed",
