@@ -172,7 +172,6 @@ func TestIsSystemTable(t *testing.T) {
 	}
 }
 
-
 func TestValidateNamespace(t *testing.T) {
 	tests := []struct {
 		name    string

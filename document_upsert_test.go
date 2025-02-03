@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 )
+
 func TestUpsert(t *testing.T) {
 	// Setup test database and initialize
 	db := setupTestDB(t)

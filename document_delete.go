@@ -140,4 +140,3 @@ func (s *Store) DeleteByFilter(ctx context.Context, namespace string, filter Fil
 
 	return nil
 }
-

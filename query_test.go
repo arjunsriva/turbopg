@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-
-
 func TestSearchVector(t *testing.T) {
 	// Setup test database
 	db := setupTestDB(t)
@@ -550,7 +548,7 @@ func TestQuery(t *testing.T) {
 				TopK:   2,
 				Metric: "cosine",
 			},
-			wantIDs: []DocumentID{},  // Empty since no docs match both criteria
+			wantIDs: []DocumentID{}, // Empty since no docs match both criteria
 			wantErr: false,
 		},
 		{
@@ -654,7 +652,7 @@ func TestQuery(t *testing.T) {
 			name: "vector similarity with price filter",
 			opts: QueryOptions{
 				Namespace: ns,
-				Vector:    []float32{0, 1, 0, 0},  // Exactly matches doc3's vector
+				Vector:    []float32{0, 1, 0, 0}, // Exactly matches doc3's vector
 				Filter: FilterCondition{
 					Field: "price",
 					Op:    FilterOpLt,
@@ -663,7 +661,7 @@ func TestQuery(t *testing.T) {
 				TopK:   2,
 				Metric: "cosine",
 			},
-			wantIDs: []DocumentID{"doc3"},  // Only expect doc3 which has both price < 150 and exact vector match
+			wantIDs: []DocumentID{"doc3"}, // Only expect doc3 which has both price < 150 and exact vector match
 			wantErr: false,
 		},
 		{
@@ -738,8 +736,6 @@ func TestQuery(t *testing.T) {
 		})
 	}
 }
-
-
 
 // TestZeroSimilarityHandling tests how pgvector handles vectors with zero similarity
 func TestZeroSimilarityHandling(t *testing.T) {

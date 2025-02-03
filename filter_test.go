@@ -4,8 +4,6 @@ import (
 	"testing"
 )
 
-
-
 func TestBuildFilterCondition(t *testing.T) {
 	store := &Store{
 		logger: &testLogger{t: t},
@@ -211,4 +209,4 @@ func TestBuildFilterCondition(t *testing.T) {
 			}
 		})
 	}
-} 
+}

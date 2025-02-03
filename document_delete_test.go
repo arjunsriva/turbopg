@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-
-
 func TestDelete(t *testing.T) {
 	// Setup test database
 	db := setupTestDB(t)

@@ -12,7 +12,6 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-
 type testLogger struct {
 	t *testing.T
 }
@@ -28,7 +27,6 @@ func (l *testLogger) Error(msg string, fields ...Field) {
 func (l *testLogger) Debug(msg string, fields ...Field) {
 	l.t.Logf("DEBUG: %s %v", msg, fields)
 }
-
 
 // TestDB wraps a sql.DB with its container for testing
 type TestDB struct {

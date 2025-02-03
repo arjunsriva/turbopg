@@ -31,7 +31,6 @@ type QueryOptions struct {
 	Metric string
 }
 
-
 // QueryResult represents a single search result with its score
 type QueryResult struct {
 	// Document that matched the query
@@ -42,9 +41,6 @@ type QueryResult struct {
 	// Higher is better for similarity metrics (cosine)
 	Score float64
 }
-
-
-
 
 // SearchVector finds the top-K most similar vectors in a namespace
 func (s *Store) SearchVector(ctx context.Context, namespace string, vector []float32, topK int, metric string) ([]QueryResult, error) {
@@ -68,7 +64,7 @@ func (s *Store) SearchVector(ctx context.Context, namespace string, vector []flo
 	var operator string
 	switch metric {
 	case "cosine":
-		operator = "<->"
+		operator = "<=>"
 	case "euclidean":
 		operator = "<->"
 	case "euclidean_squared":
@@ -163,7 +159,6 @@ func (s *Store) SearchFiltered(ctx context.Context, namespace string, vector []f
 		Metric:    metric,
 	})
 }
-
 
 // Query searches for documents based on the provided options
 func (s *Store) Query(ctx context.Context, opts QueryOptions) ([]QueryResult, error) {

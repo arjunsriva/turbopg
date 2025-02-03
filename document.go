@@ -14,4 +14,3 @@ type Document struct {
 	// Attributes is a map of arbitrary metadata associated with this document
 	Attributes map[string]interface{}
 }
-

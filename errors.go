@@ -8,7 +8,6 @@ var (
 	ErrInvalidVectorDimensions = errors.New("vector dimensions do not match namespace configuration")
 )
 
-
 // NamespaceError represents an error related to namespace validation
 type NamespaceError string
 

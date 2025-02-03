@@ -42,10 +42,6 @@ func IsSystemTable(prefix, tableName string) bool {
 	return len(tableName) > len(fullPrefix) && tableName[:len(fullPrefix)] == fullPrefix
 }
 
-
-
-
-
 // ValidateNamespace checks if a namespace name is valid according to PostgreSQL identifier rules
 // and our additional constraints
 func ValidateNamespace(namespace string) error {
