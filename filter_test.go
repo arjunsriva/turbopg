@@ -4,11 +4,7 @@ import (
 	"testing"
 )
 
-func TestBuildFilterCondition(t *testing.T) {
-	store := &Store{
-		logger: &testLogger{t: t},
-	}
-
+func TestBuildFilterSQL(t *testing.T) {
 	tests := []struct {
 		name      string
 		filter    interface{} // Changed from Filter to interface{} to allow non-Filter values
@@ -180,7 +176,7 @@ func TestBuildFilterCondition(t *testing.T) {
 
 			// Handle type assertion error for invalid filter type
 			if filter, ok := tt.filter.(Filter); ok {
-				sql, args, err = store.buildFilterCondition(filter)
+				sql, args, err = buildFilterSQL(filter)
 			} else {
 				err = ErrInvalidFilterType
 			}

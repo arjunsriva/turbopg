@@ -211,7 +211,7 @@ func (s *Store) Query(ctx context.Context, opts QueryOptions) ([]QueryResult, er
 	}
 
 	if opts.Filter != nil {
-		whereClause, filterArgs, err := s.buildFilterCondition(opts.Filter)
+		whereClause, filterArgs, err := buildFilterSQL(opts.Filter)
 		if err != nil {
 			return nil, fmt.Errorf("build filter: %w", err)
 		}

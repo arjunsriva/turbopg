@@ -175,13 +175,3 @@ func buildLogicalFilterSQL(f LogicalFilter) (string, []interface{}, error) {
 
 	return strings.Join(conditions, op), args, nil
 }
-
-// buildFilterCondition converts a Filter to SQL WHERE clause and args
-func (s *Store) buildFilterCondition(filter Filter) (string, []interface{}, error) {
-	return buildFilterSQL(filter)
-}
-
-// buildSimpleFilterCondition converts a FilterCondition to SQL
-func (s *Store) buildSimpleFilterCondition(f FilterCondition) (string, []interface{}, error) {
-	return buildSimpleFilterSQL(f)
-}

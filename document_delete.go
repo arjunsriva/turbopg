@@ -103,7 +103,7 @@ func (s *Store) DeleteByFilter(ctx context.Context, namespace string, filter Fil
 	}()
 
 	// Build delete query with filter
-	whereClause, args, err := s.buildSimpleFilterCondition(filter)
+	whereClause, args, err := buildSimpleFilterSQL(filter)
 	if err != nil {
 		return fmt.Errorf("build filter: %w", err)
 	}
