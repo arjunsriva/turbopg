@@ -185,13 +185,3 @@ func (s *Store) buildFilterCondition(filter Filter) (string, []interface{}, erro
 func (s *Store) buildSimpleFilterCondition(f FilterCondition) (string, []interface{}, error) {
 	return buildSimpleFilterSQL(f)
 }
-
-// buildInCondition handles IN and NOT IN conditions
-func (s *Store) buildInCondition(f FilterCondition, not bool) (string, []interface{}, error) {
-	return buildInConditionSQL(f, not)
-}
-
-// buildLogicalFilterCondition converts a LogicalFilter to SQL
-func (s *Store) buildLogicalFilterCondition(f LogicalFilter) (string, []interface{}, error) {
-	return buildLogicalFilterSQL(f)
-}

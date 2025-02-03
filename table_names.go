@@ -2,6 +2,7 @@ package turbopg
 
 import (
 	"fmt"
+	"strings"
 )
 
 // Table prefix constants
@@ -39,4 +40,54 @@ func GetNamespaceFromTableName(prefix, tableName string) (string, bool) {
 func IsSystemTable(prefix, tableName string) bool {
 	fullPrefix := prefix + SystemPrefix
 	return len(tableName) > len(fullPrefix) && tableName[:len(fullPrefix)] == fullPrefix
+}
+
+
+
+
+
+// ValidateNamespace checks if a namespace name is valid according to PostgreSQL identifier rules
+// and our additional constraints
+func ValidateNamespace(namespace string) error {
+	// 1. Length limits
+	if len(namespace) == 0 {
+		return ErrEmptyNamespace
+	}
+	if len(namespace) > 63 { // PostgreSQL identifier limit
+		return ErrNamespaceTooLong
+	}
+
+	// 2. Character rules
+	for i, r := range namespace {
+		// Must start with letter or underscore
+		if i == 0 && !(isLetter(r) || r == '_') {
+			return ErrInvalidNamespaceStart
+		}
+		// Can only contain letters, numbers, underscore
+		if !isLetter(r) && !isNumber(r) && r != '_' {
+			return ErrInvalidNamespaceChar
+		}
+	}
+
+	// 3. Reserved names
+	reservedPrefixes := []string{
+		"pg_",     // PostgreSQL system
+		"vector_", // Our system tables
+	}
+	for _, prefix := range reservedPrefixes {
+		if strings.HasPrefix(namespace, prefix) {
+			return ErrReservedNamespace
+		}
+	}
+
+	return nil
+}
+
+// Helper functions
+func isLetter(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+}
+
+func isNumber(r rune) bool {
+	return r >= '0' && r <= '9'
 }

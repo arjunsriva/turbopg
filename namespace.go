@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/arjunsriva/turbopg/internal/validation"
 	"github.com/golang-migrate/migrate/v4"
 )
 
@@ -68,7 +67,7 @@ type Namespace struct {
 // CreateNamespace creates a new namespace with the given configuration
 func (s *Store) CreateNamespace(ctx context.Context, namespace string, opts CreateNamespaceOptions) error {
 	// Validate namespace name
-	if err := validation.ValidateNamespace(namespace); err != nil {
+	if err := ValidateNamespace(namespace); err != nil {
 		return fmt.Errorf("invalid namespace name: %w", err)
 	}
 
@@ -190,7 +189,7 @@ func (s *Store) CreateNamespace(ctx context.Context, namespace string, opts Crea
 // This operation is idempotent - deleting a non-existent namespace is not an error.
 func (s *Store) DeleteNamespace(ctx context.Context, namespace string) error {
 	// Validate namespace name
-	if err := validation.ValidateNamespace(namespace); err != nil {
+	if err := ValidateNamespace(namespace); err != nil {
 		return fmt.Errorf("invalid namespace name: %w", err)
 	}
 
@@ -329,7 +328,7 @@ func (s *Store) ListNamespaces(ctx context.Context, opts ListNamespacesOptions) 
 // GetNamespace gets information about a specific namespace
 func (s *Store) GetNamespace(ctx context.Context, namespace string) (*Namespace, error) {
 	// Validate namespace name
-	if err := validation.ValidateNamespace(namespace); err != nil {
+	if err := ValidateNamespace(namespace); err != nil {
 		return nil, fmt.Errorf("invalid namespace name: %w", err)
 	}
 

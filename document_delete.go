@@ -5,14 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/arjunsriva/turbopg/internal/validation"
 	"github.com/lib/pq"
 )
 
 // Delete removes documents by their IDs from a namespace
 func (s *Store) Delete(ctx context.Context, namespace string, ids []DocumentID) error {
 	// Validate namespace
-	if err := validation.ValidateNamespace(namespace); err != nil {
+	if err := ValidateNamespace(namespace); err != nil {
 		return fmt.Errorf("invalid namespace name: %w", err)
 	}
 
@@ -80,7 +79,7 @@ func (s *Store) Delete(ctx context.Context, namespace string, ids []DocumentID) 
 // DeleteByFilter removes documents that match the given filter from a namespace
 func (s *Store) DeleteByFilter(ctx context.Context, namespace string, filter FilterCondition) error {
 	// Validate namespace
-	if err := validation.ValidateNamespace(namespace); err != nil {
+	if err := ValidateNamespace(namespace); err != nil {
 		return fmt.Errorf("invalid namespace name: %w", err)
 	}
 
