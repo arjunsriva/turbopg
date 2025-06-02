@@ -1,0 +1,9 @@
+# Binaries
+bin/
+*.out
+*.html
+
+# IDE / OS specific
+.idea/
+.vscode/
+*.DS_Store
