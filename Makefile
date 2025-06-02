@@ -25,9 +25,25 @@ coverage:
 	go tool cover -html=coverage.out -o coverage.html
 
 # Clean up
-clean:
+clean: clean-server
 	rm -f coverage.out coverage.html
 	go clean
+
+## build-server: build the turbopg-server binary
+build-server:
+	@echo "Building turbopg-server..."
+	@mkdir -p bin
+	go build -o bin/turbopg-server ./cmd/turbopg-server
+
+## run-server: build and run the turbopg-server
+run-server: build-server
+	@echo "Starting turbopg-server..."
+	./bin/turbopg-server
+
+## clean-server: remove the turbopg-server binary
+clean-server:
+	@echo "Cleaning turbopg-server..."
+	rm -f bin/turbopg-server
 
 # Run integration tests
 integration-test:

@@ -386,4 +386,59 @@ This project is currently under development and does not have a specific license
 
 ---
 
+## TurboPG API Server
+
+A simple HTTP server that provides a [Turbopuffer](https://turbopuffer.com/)-compatible API for interacting with TurboPG. This server is useful for testing, local development, and for use with tools like `tpuf-benchmark`.
+
+### Configuration
+
+The server is configured using the following environment variables:
+
+*   `DATABASE_URL`: The PostgreSQL connection string.
+    *   Default: `postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable`
+*   `TURBOPG_API_KEY`: The API key for authorizing requests.
+    *   Default: `testapikey`
+*   `TURBOPG_PORT`: The port on which the server will listen.
+    *   Default: `8080`
+*   `TURBOPG_STORE_PREFIX`: The prefix used for TurboPG's internal tables.
+    *   Default: `tpga_` (note: the library `turbopg` defaults to `turbopg_`)
+
+**Example of setting environment variables:**
+```bash
+export DATABASE_URL="postgres://myuser:mypass@localhost:5432/mydb?sslmode=verify-full"
+export TURBOPG_API_KEY="yoursecureapikey123"
+export TURBOPG_PORT="9000"
+```
+
+### Running the server
+
+You can build and run the server using the provided Makefile targets:
+
+```bash
+# To build the server binary (output to ./bin/turbopg-server)
+make build-server
+
+# To run the server (after building)
+# Ensure environment variables are set if you are not using defaults.
+make run-server
+
+# Example with custom API key:
+# export TURBOPG_API_KEY="anothersecurekey"
+# make run-server
+```
+
+The server will start and listen on the configured port (default 8080).
+
+### Endpoints
+
+The server exposes the following primary endpoints, designed for compatibility with `turbopuffer-tpuf-benchmark` and similar tools:
+
+*   `POST /v1/namespaces/{namespace_name}`: Upserts data into the specified namespace. If the namespace does not exist, it will be created based on the data in the first upsert (vector dimensions, distance metric).
+*   `DELETE /v1/namespaces/{namespace_name}`: Clears all data from a namespace by deleting and recreating it with the same configuration.
+*   `HEAD /v1/namespaces/{namespace_name}`: Retrieves metadata about a namespace (e.g., approximate vector count, dimensions, distance metric) in response headers.
+*   `POST /v1/namespaces/{namespace_name}/query`: Queries a namespace using vector similarity search and/or attribute filters.
+*   `GET /v1/namespaces/{namespace_name}/_debug/{operation}`: Handles debug operations like `purge_cache` or `warm_cache`. These are currently no-ops for the `turbopg-api` server but are provided for benchmark compatibility.
+
+---
+
 **TurboPG** - Bring vector search to your PostgreSQL database effortlessly!
