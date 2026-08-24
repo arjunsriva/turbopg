@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/docker/go-connections/nat"
@@ -40,20 +42,7 @@ func setupTestDB(t *testing.T) *TestDB {
 	t.Helper()
 	ctx := context.Background()
 
-	// Container configuration
-	req := testcontainers.ContainerRequest{
-		Image:        "pgvector/pgvector:0.8.0-pg15",
-		ExposedPorts: []string{"5432/tcp"},
-		Env: map[string]string{
-			"POSTGRES_PASSWORD": "postgres",
-			"POSTGRES_USER":     "postgres",
-			"POSTGRES_DB":       "postgres",
-		},
-		WaitingFor: wait.ForSQL("5432/tcp", "postgres", func(host string, port nat.Port) string {
-			return fmt.Sprintf("host=%s port=%s user=postgres password=postgres dbname=postgres sslmode=disable",
-				host, port.Port())
-		}),
-	}
+	req := postgresTestRequest()
 
 	// Start container
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -98,11 +87,42 @@ func setupTestDB(t *testing.T) *TestDB {
 	}
 }
 
+func postgresTestRequest() testcontainers.ContainerRequest {
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Dir(file)
+	return testcontainers.ContainerRequest{
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context:    filepath.Join(root, "docker", "postgres"),
+			Dockerfile: "Dockerfile",
+			Repo:       "turbopg-test-pg",
+			Tag:        "17-pgvector-textsearch",
+			KeepImage:  true,
+		},
+		ExposedPorts: []string{"5432/tcp"},
+		Env: map[string]string{
+			"POSTGRES_PASSWORD": "postgres",
+			"POSTGRES_USER":     "postgres",
+			"POSTGRES_DB":       "postgres",
+		},
+		Cmd: []string{"postgres", "-c", "shared_preload_libraries=pg_textsearch"},
+		WaitingFor: wait.ForSQL("5432/tcp", "postgres", func(host string, port nat.Port) string {
+			return fmt.Sprintf("host=%s port=%s user=postgres password=postgres dbname=postgres sslmode=disable",
+				host, port.Port())
+		}),
+	}
+}
+
 // cleanup terminates the test container
 func (db *TestDB) cleanup(t *testing.T) {
 	if err := db.container.Terminate(context.Background()); err != nil {
 		t.Fatalf("failed to terminate container: %v", err)
 	}
+}
+
+// Cleanup terminates the testcontainer. Exported for tests in other packages.
+func (db *TestDB) Cleanup(t *testing.T) {
+	t.Helper()
+	db.cleanup(t)
 }
 
 // DatabaseURL returns the URL for connecting to the test database
@@ -132,19 +152,7 @@ func TestStore(t *testing.T, prefix string) (*Store, *TestDB) {
 
 // NewTestDB creates a new test database
 func NewTestDB(t *testing.T) *TestDB {
-	// Create container request
-	req := testcontainers.ContainerRequest{
-		Image:        "pgvector/pgvector:0.8.0-pg15",
-		ExposedPorts: []string{"5432/tcp"},
-		Env: map[string]string{
-			"POSTGRES_USER":     "postgres",
-			"POSTGRES_PASSWORD": "postgres",
-			"POSTGRES_DB":       "postgres",
-		},
-		WaitingFor: wait.ForSQL(nat.Port("5432"), "postgres", func(host string, port nat.Port) string {
-			return fmt.Sprintf("postgres://postgres:postgres@%s:%s/postgres?sslmode=disable", host, port.Port())
-		}),
-	}
+	req := postgresTestRequest()
 
 	// Start container
 	container, err := testcontainers.GenericContainer(context.Background(), testcontainers.GenericContainerRequest{

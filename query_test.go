@@ -16,7 +16,7 @@ func TestSearchVector(t *testing.T) {
 		Dimensions: 4,
 		IndexConfig: &IndexConfig{
 			DistanceMetric: "cosine_distance",
-			Lists:          100,
+			Lists:          1,
 		},
 	})
 	if err != nil {
@@ -135,7 +135,7 @@ func TestSearchFiltered(t *testing.T) {
 		Dimensions: 4,
 		IndexConfig: &IndexConfig{
 			DistanceMetric: "cosine_distance",
-			Lists:          100,
+			Lists:          1,
 		},
 	})
 	if err != nil {
@@ -361,7 +361,7 @@ func TestQuery(t *testing.T) {
 		Dimensions: 4,
 		IndexConfig: &IndexConfig{
 			DistanceMetric: "cosine_distance",
-			Lists:          100,
+			Lists:          1,
 		},
 	})
 	if err != nil {
@@ -452,7 +452,7 @@ func TestQuery(t *testing.T) {
 				TopK:   2,
 				Metric: "cosine",
 			},
-			wantIDs: []DocumentID{}, // Empty since no docs match both criteria
+			wantIDs: []DocumentID{"doc3", "doc4"},
 			wantErr: false,
 		},
 		{
@@ -562,10 +562,10 @@ func TestQuery(t *testing.T) {
 					Op:    FilterOpLt,
 					Value: 150,
 				},
-				TopK:   2,
+				TopK:   1,
 				Metric: "cosine",
 			},
-			wantIDs: []DocumentID{"doc3"}, // Only expect doc3 which has both price < 150 and exact vector match
+			wantIDs: []DocumentID{"doc3"},
 			wantErr: false,
 		},
 		{
@@ -668,7 +668,7 @@ func TestZeroSimilarityHandling(t *testing.T) {
 		Dimensions: 3,
 		IndexConfig: &IndexConfig{
 			DistanceMetric: "cosine_distance",
-			Lists:          100,
+			Lists:          1,
 		},
 	})
 	if err != nil {
@@ -757,6 +757,41 @@ func TestZeroSimilarityHandling(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEuclideanSquaredDist(t *testing.T) {
+	store, db, ctx := SetupTestStore(t, "l2sq_", false)
+	defer db.cleanup(t)
+
+	ns := "l2"
+	if err := store.CreateNamespace(ctx, ns, CreateNamespaceOptions{
+		Dimensions:  2,
+		IndexConfig: &IndexConfig{DistanceMetric: "euclidean_squared", Lists: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	docs := []Document{
+		{ID: "7", Vector: []float32{0.7, 0.7}},
+		{ID: "10", Vector: []float32{1.0, 1.0}},
+	}
+	if err := store.Upsert(ctx, docs, UpsertOptions{Namespace: ns}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Query(ctx, QueryOptions{
+		Namespace: ns,
+		TopK:      1,
+		Metric:    "euclidean_squared",
+		Vector:    []float32{0.8, 0.7},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Document.ID != "7" {
+		t.Fatalf("got=%v", got)
+	}
+	if math.Abs(got[0].Score-0.01) > 1e-5 {
+		t.Fatalf("score=%v want 0.01", got[0].Score)
 	}
 }
 

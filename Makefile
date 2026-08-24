@@ -1,4 +1,4 @@
-.PHONY: test lint coverage install-dev-tools integration-test
+.PHONY: test lint coverage install-dev-tools integration-test official-python-correctness
 
 # Default target
 all: fmt test lint
@@ -29,21 +29,34 @@ clean: clean-server
 	rm -f coverage.out coverage.html
 	go clean
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+LDFLAGS = -X main.Version=$(VERSION) -X main.Commit=$(COMMIT)
+
 ## build-server: build the turbopg-server binary
 build-server:
 	@echo "Building turbopg-server..."
 	@mkdir -p bin
-	go build -o bin/turbopg-server ./cmd/turbopg-server
+	go build -ldflags "$(LDFLAGS)" -o bin/turbopg-server ./cmd/turbopg-server
 
 ## run-server: build and run the turbopg-server
 run-server: build-server
 	@echo "Starting turbopg-server..."
-	./bin/turbopg-server
+	TURBOPG_ALLOW_INSECURE_API_KEY=1 ./bin/turbopg-server
 
 ## clean-server: remove the turbopg-server binary
 clean-server:
 	@echo "Cleaning turbopg-server..."
 	rm -f bin/turbopg-server
+
+# Run official tpuf-benchmark smoke against a local server (DATABASE_URL required).
+benchmark-smoke: build-server
+	@echo "Use CI or run tpufbench against a started turbopg-server. See .github/workflows/benchmark_test.yml"
+
+# Official turbopuffer-python custom tests (allowlisted). Requires a running
+# turbopg-server and TURBOPUFFER_BASE_URL / TURBOPUFFER_API_KEY.
+official-python-correctness:
+	bash tests/official-python/run.sh
 
 # Run integration tests
 integration-test:

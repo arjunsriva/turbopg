@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestCreateNamespace(t *testing.T) {
@@ -65,9 +66,17 @@ func TestCreateNamespace(t *testing.T) {
 			name:      "invalid dimensions",
 			namespace: "bad_dims",
 			opts: CreateNamespaceOptions{
-				Dimensions: 0,
+				Dimensions: -1,
 			},
 			wantErr: true,
+		},
+		{
+			name:      "fts only namespace",
+			namespace: "fts_only",
+			opts: CreateNamespaceOptions{
+				Dimensions: 0,
+			},
+			wantErr: false,
 		},
 		{
 			name:      "invalid distance metric",
@@ -112,7 +121,10 @@ func TestCreateNamespace(t *testing.T) {
 				t.Error("table was not created")
 			}
 
-			// Verify index exists
+			if tt.opts.Dimensions == 0 {
+				return
+			}
+
 			indexName := fmt.Sprintf("%s_vector_idx", tableName)
 			query = `
 				SELECT EXISTS (
@@ -124,6 +136,21 @@ func TestCreateNamespace(t *testing.T) {
 			err = db.QueryRowContext(ctx, query, tableName, indexName).Scan(&exists)
 			if err != nil {
 				t.Fatalf("failed to check if index exists: %v", err)
+			}
+			lists := 1
+			if tt.opts.IndexConfig != nil && tt.opts.IndexConfig.Lists > 0 {
+				lists = tt.opts.IndexConfig.Lists
+			}
+			ns, err := store.GetNamespace(ctx, tt.namespace)
+			if err != nil {
+				t.Fatalf("GetNamespace: %v", err)
+			}
+			if ns.IndexConfig == nil || ns.IndexConfig.Lists != lists {
+				t.Fatalf("persisted lists=%v want %d", ns.IndexConfig, lists)
+			}
+			if lists > 1 {
+				// pgvector cannot build IVFFlat until the table has at least `lists` rows.
+				return
 			}
 			if !exists {
 				t.Error("index was not created")
@@ -298,6 +325,15 @@ func TestListNamespaces(t *testing.T) {
 			want:  []string{"other", "vectors1"},
 			total: 3,
 		},
+		{
+			name: "list with cursor",
+			opts: ListNamespacesOptions{
+				Cursor: "other",
+				Limit:  1,
+			},
+			want:  []string{"vectors1"},
+			total: 2,
+		},
 	}
 
 	for _, tt := range tests {
@@ -370,6 +406,7 @@ func TestGetNamespace(t *testing.T) {
 					DistanceMetric: "euclidean_squared",
 					Lists:          200,
 				},
+				Schema: map[string]interface{}{},
 			},
 			wantErr: false,
 		},
@@ -398,9 +435,28 @@ func TestGetNamespace(t *testing.T) {
 				return
 			}
 
+			got.CreatedAt = time.Time{}
+			got.UpdatedAt = time.Time{}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("GetNamespace() = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeAndQueryMetric(t *testing.T) {
+	got, err := NormalizeDistanceMetric("cosine")
+	if err != nil || got != "cosine_distance" {
+		t.Fatalf("%s %v", got, err)
+	}
+	if _, err := NormalizeDistanceMetric("nope"); err == nil {
+		t.Fatal("expected error")
+	}
+	op, err := QueryMetricOperator("euclidean_squared")
+	if err != nil || op != "<->" {
+		t.Fatalf("%s %v", op, err)
+	}
+	if _, err := QueryMetricOperator("nope"); err == nil {
+		t.Fatal("expected error")
 	}
 }

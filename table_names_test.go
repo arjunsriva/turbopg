@@ -1,6 +1,9 @@
 package turbopg
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestGetSystemTableName(t *testing.T) {
 	tests := []struct {
@@ -190,17 +193,27 @@ func TestValidateNamespace(t *testing.T) {
 		},
 		{
 			name:    "too long namespace",
-			input:   "this_namespace_is_way_too_long_and_exceeds_the_postgres_identifier_limit_by_a_lot",
+			input:   strings.Repeat("a", MaxNamespaceLength+1),
 			wantErr: ErrNamespaceTooLong,
 		},
 		{
 			name:    "starts with number",
 			input:   "1namespace",
-			wantErr: ErrInvalidNamespaceStart,
+			wantErr: nil,
+		},
+		{
+			name:    "hyphenated namespace",
+			input:   "test-namespace",
+			wantErr: nil,
+		},
+		{
+			name:    "dotted namespace",
+			input:   "test.namespace",
+			wantErr: nil,
 		},
 		{
 			name:    "invalid characters",
-			input:   "test-namespace",
+			input:   "test/namespace",
 			wantErr: ErrInvalidNamespaceChar,
 		},
 		{
@@ -232,5 +245,17 @@ func TestValidateNamespace(t *testing.T) {
 				t.Errorf("ValidateNamespace() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestSQLIdentAndLongTableName(t *testing.T) {
+	quoted := SQLIdent("ns_foo-bar")
+	if quoted[0] != '"' {
+		t.Fatalf("quoted=%s", quoted)
+	}
+	longNS := strings.Repeat("n", 80)
+	long := GetNamespaceTableName("p_", longNS)
+	if len(long) > 63 {
+		t.Fatalf("len=%d name=%s", len(long), long)
 	}
 }

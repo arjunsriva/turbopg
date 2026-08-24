@@ -3,6 +3,12 @@ bin/
 *.out
 *.html
 
+# Local copies of official turbopuffer docs/repos (not part of this project)
+_reference/
+
+# tpufbench output
+results/
+
 # IDE / OS specific
 .idea/
 .vscode/
