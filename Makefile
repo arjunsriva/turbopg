@@ -58,9 +58,8 @@ benchmark-smoke: build-server
 official-python-correctness:
 	bash tests/official-python/run.sh
 
-# Run integration tests
-integration-test:
-	go test -race -tags=integration ./...
+# Alias: tests already use testcontainers (no build tag).
+integration-test: test
 
 # Format code
 fmt:

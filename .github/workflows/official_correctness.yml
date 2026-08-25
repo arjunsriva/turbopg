@@ -77,5 +77,5 @@ jobs:
           TURBOPUFFER_PYTHON_DIR: ${{ github.workspace }}/turbopuffer-python
           PYTHON: python3
         run: |
-          python3 -m pip install -q -e ./turbopuffer-python pytest pytest-asyncio numpy
+          python3 -m pip install -q -e ./turbopuffer-python pytest pytest-asyncio pytest-xdist numpy
           bash tests/official-python/run.sh

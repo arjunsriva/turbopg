@@ -31,14 +31,15 @@ if [[ -z "$SDK_DIR" ]]; then
 fi
 
 PYTHON="${PYTHON:-python3}"
-if ! "$PYTHON" -c "import turbopuffer, pytest, numpy" 2>/dev/null; then
-  "$PYTHON" -m pip install -q -e "$SDK_DIR" pytest pytest-asyncio numpy
+if ! "$PYTHON" -c "import turbopuffer, pytest, numpy, xdist" 2>/dev/null; then
+  "$PYTHON" -m pip install -q -e "$SDK_DIR" pytest pytest-asyncio pytest-xdist numpy
 fi
 
 cd "$SDK_DIR"
 # shellcheck disable=SC2046
 exec "$PYTHON" -m pytest \
   -o addopts= \
+  -o "markers=xdist_group: pytest-xdist grouping" \
   --asyncio-mode=auto \
   -p no:cacheprovider \
   --tb=short \
