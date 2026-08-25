@@ -2,9 +2,6 @@ package turbopg
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
-	"fmt"
 )
 
 // UpsertOptions holds options for document upsert operations
@@ -15,6 +12,9 @@ type UpsertOptions struct {
 	// Optional: Skip validation of vectors and attributes
 	// Default: false (do validation)
 	SkipValidation bool
+
+	// Optional: TurboPuffer upsert_condition evaluated against the current document.
+	Condition Filter
 }
 
 // BatchUpsertOptions holds options for batch document upsert operations
@@ -38,7 +38,11 @@ func validateDocument(doc *Document, dimensions int) error {
 		return ErrEmptyDocumentID
 	}
 
-	if len(doc.Vector) != dimensions {
+	if dimensions == 0 {
+		if len(doc.Vector) > 0 {
+			return ErrInvalidVectorDimensions
+		}
+	} else if len(doc.Vector) != dimensions {
 		return ErrInvalidVectorDimensions
 	}
 
@@ -51,176 +55,23 @@ func validateDocument(doc *Document, dimensions int) error {
 
 // Upsert inserts or updates a batch of documents in a namespace
 func (s *Store) Upsert(ctx context.Context, docs []Document, opts UpsertOptions) error {
-	// Validate namespace
-	ns, err := s.GetNamespace(ctx, opts.Namespace)
-	if err != nil {
-		return err
-	}
-
-	// Validate documents unless explicitly skipped
-	if !opts.SkipValidation {
-		for i := range docs {
-			if err := validateDocument(&docs[i], ns.Dimensions); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Build table name
-	tableName := GetNamespaceTableName(s.prefix, opts.Namespace)
-
-	// Start transaction
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
-			s.logger.Error("failed to rollback transaction", Field{Key: "error", Value: err.Error()})
-		}
-	}()
-
-	// Prepare upsert statement
-	stmt := fmt.Sprintf(`
-		INSERT INTO %s (id, vector, attributes)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (id) DO UPDATE SET
-			vector = EXCLUDED.vector,
-			attributes = EXCLUDED.attributes`,
-		tableName)
-
-	// Execute upserts
-	for _, doc := range docs {
-		// Convert vector to string format that pgvector expects: [1,2,3]
-		vectorStr := VectorToString(doc.Vector)
-
-		// Convert attributes to JSON
-		attrsJSON, err := json.Marshal(doc.Attributes)
-		if err != nil {
-			return fmt.Errorf("marshal attributes: %w", err)
-		}
-
-		// Execute upsert
-		_, err = tx.ExecContext(ctx, stmt, doc.ID, vectorStr, attrsJSON)
-		if err != nil {
-			return fmt.Errorf("upsert document: %w", err)
-		}
-	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
-	}
-
-	s.logger.Info("upserted documents",
-		Field{Key: "namespace", Value: opts.Namespace},
-		Field{Key: "count", Value: len(docs)},
-	)
-
-	return nil
+	_, err := s.Write(ctx, Write{
+		Namespace:       opts.Namespace,
+		Upserts:         docs,
+		UpsertCondition: opts.Condition,
+		SkipValidation:  opts.SkipValidation,
+	})
+	return err
 }
 
-// UpsertBatch inserts or updates documents in batches
+// UpsertBatch inserts or updates documents. BatchSize is accepted for
+// compatibility; all documents run in one Store.Write transaction.
 func (s *Store) UpsertBatch(ctx context.Context, docs []Document, opts BatchUpsertOptions) error {
-	if len(docs) == 0 {
-		return nil
-	}
-
-	// Use default batch size if not specified
-	batchSize := opts.BatchSize
-	if batchSize <= 0 {
-		batchSize = DefaultBatchSize
-	}
-	if batchSize > MaxBatchSize {
-		batchSize = MaxBatchSize
-	}
-
-	// Validate namespace once for all batches
-	ns, err := s.GetNamespace(ctx, opts.Namespace)
-	if err != nil {
-		return err
-	}
-
-	// Build table name
-	tableName := GetNamespaceTableName(s.prefix, opts.Namespace)
-
-	// Start transaction
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() {
-		if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
-			s.logger.Error("failed to rollback transaction", Field{Key: "error", Value: err.Error()})
-		}
-	}()
-
-	// Prepare statement once for all batches
-	stmt := fmt.Sprintf(`
-		INSERT INTO %s (id, vector, attributes)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (id) DO UPDATE SET
-			vector = EXCLUDED.vector,
-			attributes = EXCLUDED.attributes`,
-		tableName)
-
-	preparedStmt, err := tx.PrepareContext(ctx, stmt)
-	if err != nil {
-		return fmt.Errorf("prepare statement: %w", err)
-	}
-	defer preparedStmt.Close()
-
-	// Process documents in batches
-	for i := 0; i < len(docs); i += batchSize {
-		end := i + batchSize
-		if end > len(docs) {
-			end = len(docs)
-		}
-		batch := docs[i:end]
-
-		// Validate batch unless explicitly skipped
-		if !opts.SkipValidation {
-			for j := range batch {
-				if err := validateDocument(&batch[j], ns.Dimensions); err != nil {
-					return fmt.Errorf("validate document at index %d: %w", i+j, err)
-				}
-			}
-		}
-
-		// Execute batch
-		for _, doc := range batch {
-			// Convert vector to string format that pgvector expects: [1,2,3]
-			vectorStr := VectorToString(doc.Vector)
-
-			// Convert attributes to JSON
-			attrsJSON, err := json.Marshal(doc.Attributes)
-			if err != nil {
-				return fmt.Errorf("marshal attributes: %w", err)
-			}
-
-			// Execute upsert using prepared statement
-			_, err = preparedStmt.ExecContext(ctx, doc.ID, vectorStr, attrsJSON)
-			if err != nil {
-				return fmt.Errorf("upsert document: %w", err)
-			}
-		}
-
-		s.logger.Info("upserted batch",
-			Field{Key: "namespace", Value: opts.Namespace},
-			Field{Key: "batch_size", Value: len(batch)},
-			Field{Key: "progress", Value: fmt.Sprintf("%d/%d", end, len(docs))},
-		)
-	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
-	}
-
-	s.logger.Info("completed batch upsert",
-		Field{Key: "namespace", Value: opts.Namespace},
-		Field{Key: "total_documents", Value: len(docs)},
-	)
-
-	return nil
+	_, err := s.Write(ctx, Write{
+		Namespace:       opts.Namespace,
+		Upserts:         docs,
+		UpsertCondition: opts.Condition,
+		SkipValidation:  opts.SkipValidation,
+	})
+	return err
 }

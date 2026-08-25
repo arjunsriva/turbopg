@@ -1,0 +1,31 @@
+# Official turbopuffer-python tests/custom cases that assert protocol
+# correctness against TurboPG. Pinned in tests/official-python/run.sh.
+#
+# Not listed (and not run in CI):
+#   test_bm25_pre_tokenized_array  — tokenizer pre_tokenized_array + typed 422
+#   test_perf_metrics              — exhaustive_search_count is not a real scan count
+#   test_delete_vectors            — shares namespace state with test_upsert_rows
+#   test_upsert_columns            — shares namespace state with test_upsert_rows
+#   test_delete_all                — expects client_test to already exist
+#   test_query_vectors             — billing bytes are hosted-specific (zero here)
+#   test_upsert_base64_vectors     — id-order assertion after mixed writes
+#   test_compression* / respond_async / transparent_vector_encoding — client-only
+tests/custom/test_async.py::test_order_by_attribute
+tests/custom/test_async.py::test_exists
+tests/custom/test_bm25.py::test_bm25
+tests/custom/test_bm25.py::test_bm25_ContainsAllTokens
+tests/custom/test_bm25.py::test_bm25_product_operator
+tests/custom/test_copy_from_namespace.py::test_copy_from_namespace
+tests/custom/test_namespace.py::test_namespace_hint_cache_warm
+tests/custom/test_no_cmek.py::test_no_cmek
+tests/custom/test_order_by.py::test_order_by_attribute
+tests/custom/test_patch.py::test_patches
+tests/custom/test_schema.py::test_schema
+tests/custom/test_vectors.py::test_not_found_error
+tests/custom/test_vectors.py::test_list_in_empty_namespace
+tests/custom/test_vectors.py::test_delete_by_filter
+tests/custom/test_vectors.py::test_query_vectors_vector_encoding_format
+tests/custom/test_vectors.py::test_exists
+tests/custom/test_vectors.py::test_string_ids
+tests/custom/test_vectors.py::test_attribute_types
+tests/custom/test_vectors.py::test_upsert_rows

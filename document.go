@@ -11,6 +11,10 @@ type Document struct {
 	// Vector is the embedding for this document
 	Vector []float32
 
+	// ExtraVectors are named pgvector columns (schema embed destinations other
+	// than the primary vector column).
+	ExtraVectors map[string][]float32
+
 	// Attributes is a map of arbitrary metadata associated with this document
 	Attributes map[string]interface{}
 }

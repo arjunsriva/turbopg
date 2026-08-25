@@ -247,6 +247,8 @@ func TestInitializeSystemTables(t *testing.T) {
 		{"index_config", "jsonb", "NO"},
 		{"created_at", "timestamp with time zone", "NO"},
 		{"updated_at", "timestamp with time zone", "NO"},
+		{"attr_schema", "jsonb", "NO"},
+		{"extra_metadata", "jsonb", "NO"},
 	}
 
 	if len(columns) != len(expected) {

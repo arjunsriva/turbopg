@@ -299,6 +299,17 @@ func TestUpsertBatch(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "max batch size clamp",
+			docs: createDocs(3),
+			opts: BatchUpsertOptions{
+				UpsertOptions: UpsertOptions{
+					Namespace: namespace,
+				},
+				BatchSize: MaxBatchSize + 10,
+			},
+			wantErr: false,
+		},
+		{
 			name: "non-existent namespace",
 			docs: createDocs(5),
 			opts: BatchUpsertOptions{

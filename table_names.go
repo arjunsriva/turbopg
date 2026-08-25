@@ -1,14 +1,24 @@
 package turbopg
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/lib/pq"
 )
 
 // Table prefix constants
 const (
 	SystemPrefix    = "sys_"
 	NamespacePrefix = "ns_"
+
+	// MaxNamespaceLength matches TurboPuffer's documented namespace name limit.
+	MaxNamespaceLength = 128
+	// postgresIdentMax is NAMEDATALEN-1 on default PostgreSQL builds.
+	postgresIdentMax = 63
 )
 
 // GetSystemTableName returns the fully qualified name for a system table
@@ -20,7 +30,32 @@ func GetSystemTableName(prefix, table string) string {
 // GetNamespaceTableName returns the fully qualified name for a namespace table
 // Example: prefix="myapp_" namespace="documents" -> "myapp_ns_documents"
 func GetNamespaceTableName(prefix, namespace string) string {
-	return fmt.Sprintf("%s%s%s", prefix, NamespacePrefix, namespace)
+	name := fmt.Sprintf("%s%s%s", prefix, NamespacePrefix, namespace)
+	if utf8.RuneCountInString(name) <= postgresIdentMax {
+		return name
+	}
+	sum := sha256.Sum256([]byte(namespace))
+	hash := hex.EncodeToString(sum[:8])
+	base := prefix + NamespacePrefix
+	keep := postgresIdentMax - len(base) - 1 - len(hash)
+	if keep < 0 {
+		trimmed := (base + hash)
+		if len(trimmed) > postgresIdentMax {
+			return trimmed[:postgresIdentMax]
+		}
+		return trimmed
+	}
+	ns := namespace
+	if len(ns) > keep {
+		ns = ns[:keep]
+	}
+	return base + ns + "_" + hash
+}
+
+// SQLIdent quotes a PostgreSQL identifier so names with hyphens or mixed case
+// can be used safely in SQL.
+func SQLIdent(name string) string {
+	return pq.QuoteIdentifier(name)
 }
 
 // GetNamespaceFromTableName extracts the namespace name from a fully qualified table name
@@ -42,33 +77,28 @@ func IsSystemTable(prefix, tableName string) bool {
 	return len(tableName) > len(fullPrefix) && tableName[:len(fullPrefix)] == fullPrefix
 }
 
-// ValidateNamespace checks if a namespace name is valid according to PostgreSQL identifier rules
-// and our additional constraints
+// ValidateNamespace checks whether a namespace name is valid for TurboPuffer-compatible
+// use: [A-Za-z0-9-_.]{1,128}, with a few reserved prefixes blocked.
 func ValidateNamespace(namespace string) error {
-	// 1. Length limits
 	if len(namespace) == 0 {
 		return ErrEmptyNamespace
 	}
-	if len(namespace) > 63 { // PostgreSQL identifier limit
+	if utf8.RuneCountInString(namespace) > MaxNamespaceLength {
 		return ErrNamespaceTooLong
 	}
 
-	// 2. Character rules
 	for i, r := range namespace {
-		// Must start with letter or underscore
-		if i == 0 && !(isLetter(r) || r == '_') {
+		if i == 0 && !(isLetter(r) || isNumber(r) || r == '_') {
 			return ErrInvalidNamespaceStart
 		}
-		// Can only contain letters, numbers, underscore
-		if !isLetter(r) && !isNumber(r) && r != '_' {
+		if !isLetter(r) && !isNumber(r) && r != '_' && r != '-' && r != '.' {
 			return ErrInvalidNamespaceChar
 		}
 	}
 
-	// 3. Reserved names
 	reservedPrefixes := []string{
-		"pg_",     // PostgreSQL system
-		"vector_", // Our system tables
+		"pg_",
+		"vector_",
 	}
 	for _, prefix := range reservedPrefixes {
 		if strings.HasPrefix(namespace, prefix) {
@@ -79,7 +109,6 @@ func ValidateNamespace(namespace string) error {
 	return nil
 }
 
-// Helper functions
 func isLetter(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }

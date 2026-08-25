@@ -162,7 +162,7 @@ func TestDeleteByFilter(t *testing.T) {
 	tests := []struct {
 		name      string
 		namespace string
-		filter    FilterCondition
+		filter    Filter
 		wantErr   bool
 	}{
 		{
@@ -229,10 +229,50 @@ func TestDeleteByFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := store.DeleteByFilter(ctx, tt.namespace, tt.filter)
+			_, err := store.DeleteByFilter(ctx, tt.namespace, tt.filter)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("DeleteByFilter() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestClearAndCount(t *testing.T) {
+	store, db, ctx := SetupTestStore(t, "clearcnt_", false)
+	defer db.cleanup(t)
+
+	ns := "docs"
+	if err := store.CreateNamespace(ctx, ns, CreateNamespaceOptions{Dimensions: 3}); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+	docs := []Document{
+		{ID: "a", Vector: []float32{1, 0, 0}},
+		{ID: "b", Vector: []float32{0, 1, 0}},
+	}
+	if err := store.Upsert(ctx, docs, UpsertOptions{Namespace: ns}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	count, err := store.CountDocuments(ctx, ns, nil)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+
+	if err := store.ClearNamespaceData(ctx, ns); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	count, err = store.CountDocuments(ctx, ns, nil)
+	if err != nil {
+		t.Fatalf("count after clear: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("count after clear = %d, want 0", count)
+	}
+
+	if _, err := store.CountDocuments(ctx, "missing", nil); !IsNotFound(err) {
+		t.Fatalf("missing namespace error = %v, want not found", err)
 	}
 }

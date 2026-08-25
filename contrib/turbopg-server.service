@@ -1,0 +1,16 @@
+[Unit]
+Description=TurboPG TurboPuffer-compatible sidecar
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/turbopg/turbopg.env
+ExecStart=/usr/local/bin/turbopg-server
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

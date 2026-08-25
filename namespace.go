@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 )
@@ -25,13 +27,41 @@ type IndexConfig struct {
 func NewDefaultIndexConfig() *IndexConfig {
 	return &IndexConfig{
 		DistanceMetric: "cosine_distance",
-		Lists:          100, // TurboPuffer default
+		Lists:          1,
+	}
+}
+
+// NormalizeDistanceMetric maps TurboPuffer and library metric aliases to the
+// values stored in IndexConfig.DistanceMetric.
+func NormalizeDistanceMetric(metric string) (string, error) {
+	switch metric {
+	case "", "cosine", "cosine_distance":
+		return "cosine_distance", nil
+	case "euclidean_squared", "euclidean_squared_distance":
+		return "euclidean_squared", nil
+	case "euclidean", "l2":
+		return "euclidean_squared", nil
+	default:
+		return "", fmt.Errorf("invalid distance metric: %s", metric)
+	}
+}
+
+// QueryMetricOperator returns the pgvector distance operator for a metric name.
+func QueryMetricOperator(metric string) (string, error) {
+	switch metric {
+	case "", "cosine", "cosine_distance":
+		return "<=>", nil
+	case "euclidean", "l2", "euclidean_squared", "euclidean_squared_distance":
+		return "<->", nil
+	default:
+		return "", fmt.Errorf("unsupported distance metric: %s", metric)
 	}
 }
 
 // CreateNamespaceOptions holds options for namespace creation
 type CreateNamespaceOptions struct {
-	// Required: number of dimensions for vectors in this namespace
+	// Number of dimensions for vectors in this namespace. Zero creates an FTS-only
+	// namespace (nullable vector column, no IVF index).
 	Dimensions int
 
 	// Optional: index configuration
@@ -44,6 +74,8 @@ type ListNamespacesOptions struct {
 	Prefix string
 	// Maximum number of namespaces to return
 	Limit int
+	// Cursor is the last namespace name from the previous page (exclusive).
+	Cursor string
 }
 
 // ListNamespacesResponse holds the response from ListNamespaces
@@ -52,6 +84,8 @@ type ListNamespacesResponse struct {
 	Namespaces []string
 	// Total number of namespaces (ignoring limit)
 	Total int
+	// NextCursor is set when another page exists.
+	NextCursor string
 }
 
 // Namespace represents a namespace and its configuration
@@ -62,6 +96,24 @@ type Namespace struct {
 	Dimensions int
 	// Index configuration
 	IndexConfig *IndexConfig
+	// Schema is the stored TurboPuffer attribute schema.
+	Schema map[string]interface{}
+	// CreatedAt is when the namespace was first created
+	CreatedAt time.Time
+	// UpdatedAt is when the namespace metadata was last written
+	UpdatedAt time.Time
+}
+
+// NamespaceStats holds summary information about a namespace.
+type NamespaceStats struct {
+	Name             string
+	ApproximateCount int64
+	Dimensions       int
+	DistanceMetric   string
+	IndexConfig      *IndexConfig
+	Schema           map[string]interface{}
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // CreateNamespace creates a new namespace with the given configuration
@@ -71,9 +123,9 @@ func (s *Store) CreateNamespace(ctx context.Context, namespace string, opts Crea
 		return fmt.Errorf("invalid namespace name: %w", err)
 	}
 
-	// Validate dimensions
-	if opts.Dimensions <= 0 {
-		return fmt.Errorf("dimensions must be positive, got %d", opts.Dimensions)
+	// Dimensions 0 is an FTS-only namespace (nullable vector, no IVF index).
+	if opts.Dimensions < 0 {
+		return fmt.Errorf("dimensions must be >= 0, got %d", opts.Dimensions)
 	}
 
 	// Use default index config if none provided
@@ -81,43 +133,44 @@ func (s *Store) CreateNamespace(ctx context.Context, namespace string, opts Crea
 	if indexConfig == nil {
 		indexConfig = NewDefaultIndexConfig()
 	}
-
-	// Validate distance metric
-	switch indexConfig.DistanceMetric {
-	case "cosine_distance", "euclidean_squared":
-		// valid
-	default:
-		return fmt.Errorf("invalid distance metric: %s", indexConfig.DistanceMetric)
+	if indexConfig.Lists <= 0 {
+		if s.defaultLists > 0 {
+			indexConfig.Lists = s.defaultLists
+		} else {
+			indexConfig.Lists = NewDefaultIndexConfig().Lists
+		}
 	}
+	normalized, err := NormalizeDistanceMetric(indexConfig.DistanceMetric)
+	if err != nil {
+		return err
+	}
+	indexConfig.DistanceMetric = normalized
 
 	// Build table name
 	tableName := GetNamespaceTableName(s.prefix, namespace)
+	quotedTable := SQLIdent(tableName)
 
-	// Choose operator based on distance metric
-	operator := "vector_cosine_ops"
-	if indexConfig.DistanceMetric == "euclidean_squared" {
-		operator = "vector_l2_ops"
-	}
-
-	// Create up migration
-	upSQL := fmt.Sprintf(`
+	var upSQL string
+	if opts.Dimensions == 0 {
+		upSQL = fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			id TEXT PRIMARY KEY,
+			vector vector,
+			attributes JSONB
+		);`, quotedTable)
+	} else {
+		upSQL = fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
 			id TEXT PRIMARY KEY,
 			vector vector(%d),
 			attributes JSONB
-		);
-
-		CREATE INDEX IF NOT EXISTS %s_vector_idx 
-		ON %s 
-		USING ivfflat (vector %s)
-		WITH (lists = %d);`,
-		tableName, opts.Dimensions,
-		tableName, tableName, operator, indexConfig.Lists)
+		);`, quotedTable, opts.Dimensions)
+	}
 
 	// Create down migration
 	downSQL := fmt.Sprintf(`
 		DROP TABLE IF EXISTS %s CASCADE;`,
-		tableName)
+		quotedTable)
 
 	// Add migration
 	if err := s.migrator.Append(ctx, fmt.Sprintf("create_%s", namespace), upSQL, downSQL); err != nil {
@@ -143,7 +196,7 @@ func (s *Store) CreateNamespace(ctx context.Context, namespace string, opts Crea
 			WHERE schemaname = 'public'
 			AND tablename = $1
 		)`
-	err := s.db.QueryRowContext(ctx, query, tableName).Scan(&exists)
+	err = s.db.QueryRowContext(ctx, query, tableName).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("check table existence: %w", err)
 	}
@@ -156,7 +209,7 @@ func (s *Store) CreateNamespace(ctx context.Context, namespace string, opts Crea
 	}
 
 	// Write metadata to system table
-	sysTable := GetSystemTableName(s.prefix, "namespaces")
+	sysTable := SQLIdent(GetSystemTableName(s.prefix, "namespaces"))
 	indexConfigJSON, err := json.Marshal(indexConfig)
 	if err != nil {
 		return fmt.Errorf("marshal index config: %w", err)
@@ -182,6 +235,9 @@ func (s *Store) CreateNamespace(ctx context.Context, namespace string, opts Crea
 		Field{Key: "distance_metric", Value: indexConfig.DistanceMetric},
 	)
 
+	if err := s.ensureVectorIndexes(ctx, namespace); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -217,10 +273,12 @@ func (s *Store) DeleteNamespace(ctx context.Context, namespace string) error {
 		return nil
 	}
 
+	quotedTable := SQLIdent(tableName)
+
 	// Create up migration (delete)
 	upSQL := fmt.Sprintf(`
 		DROP TABLE IF EXISTS %s CASCADE;`,
-		tableName)
+		quotedTable)
 
 	// Create down migration (recreate)
 	// Note: We can't fully recreate the table since we don't store the dimensions and index config
@@ -231,7 +289,7 @@ func (s *Store) DeleteNamespace(ctx context.Context, namespace string) error {
 			vector vector(1),  -- placeholder dimension
 			attributes JSONB
 		);`,
-		tableName)
+		quotedTable)
 
 	// Add migration
 	if err := s.migrator.Append(ctx, fmt.Sprintf("delete_%s", namespace), upSQL, downSQL); err != nil {
@@ -244,7 +302,7 @@ func (s *Store) DeleteNamespace(ctx context.Context, namespace string) error {
 	}
 
 	// Delete metadata from system table
-	sysTable := GetSystemTableName(s.prefix, "namespaces")
+	sysTable := SQLIdent(GetSystemTableName(s.prefix, "namespaces"))
 	query = fmt.Sprintf(`
 		DELETE FROM %s 
 		WHERE namespace = $1`,
@@ -265,7 +323,7 @@ func (s *Store) DeleteNamespace(ctx context.Context, namespace string) error {
 // ListNamespaces lists all namespaces in the store
 func (s *Store) ListNamespaces(ctx context.Context, opts ListNamespacesOptions) (*ListNamespacesResponse, error) {
 	// Build query to list namespaces from metadata table
-	sysTable := GetSystemTableName(s.prefix, "namespaces")
+	sysTable := SQLIdent(GetSystemTableName(s.prefix, "namespaces"))
 
 	// Base query
 	query := fmt.Sprintf(`
@@ -279,6 +337,10 @@ func (s *Store) ListNamespaces(ctx context.Context, opts ListNamespacesOptions) 
 	if opts.Prefix != "" {
 		args = append(args, opts.Prefix+"%")
 		query += fmt.Sprintf(" AND namespace LIKE $%d", len(args))
+	}
+	if opts.Cursor != "" {
+		args = append(args, opts.Cursor)
+		query += fmt.Sprintf(" AND namespace > $%d", len(args))
 	}
 
 	// Add ordering
@@ -319,9 +381,15 @@ func (s *Store) ListNamespaces(ctx context.Context, opts ListNamespacesOptions) 
 		return nil, fmt.Errorf("iterate namespaces: %w", err)
 	}
 
+	next := ""
+	if opts.Limit > 0 && len(namespaces) == opts.Limit {
+		next = namespaces[len(namespaces)-1]
+	}
+
 	return &ListNamespacesResponse{
 		Namespaces: namespaces,
 		Total:      total,
+		NextCursor: next,
 	}, nil
 }
 
@@ -348,27 +416,30 @@ func (s *Store) GetNamespace(ctx context.Context, namespace string) (*Namespace,
 		return nil, fmt.Errorf("check table existence: %w", err)
 	}
 	if !exists {
-		return nil, fmt.Errorf("namespace %q does not exist", namespace)
+		return nil, NamespaceNotFound(namespace)
 	}
 
 	// Get metadata from system table
-	sysTable := GetSystemTableName(s.prefix, "namespaces")
+	sysTable := SQLIdent(GetSystemTableName(s.prefix, "namespaces"))
 	var (
 		dimensions  int
 		indexConfig IndexConfig
 		configJSON  []byte
+		schemaJSON  []byte
+		createdAt   time.Time
+		updatedAt   time.Time
 	)
 
 	query = fmt.Sprintf(`
-		SELECT dimensions, index_config
+		SELECT dimensions, index_config, attr_schema, created_at, updated_at
 		FROM %s
 		WHERE namespace = $1`,
 		sysTable)
 
-	err = s.db.QueryRowContext(ctx, query, namespace).Scan(&dimensions, &configJSON)
+	err = s.db.QueryRowContext(ctx, query, namespace).Scan(&dimensions, &configJSON, &schemaJSON, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("namespace %q metadata not found", namespace)
+			return nil, NamespaceNotFound(namespace)
 		}
 		return nil, fmt.Errorf("get metadata: %w", err)
 	}
@@ -378,9 +449,198 @@ func (s *Store) GetNamespace(ctx context.Context, namespace string) (*Namespace,
 		return nil, fmt.Errorf("unmarshal index config: %w", err)
 	}
 
+	schema := map[string]interface{}{}
+	if len(schemaJSON) > 0 {
+		if err := json.Unmarshal(schemaJSON, &schema); err != nil {
+			return nil, fmt.Errorf("unmarshal schema: %w", err)
+		}
+	}
+
 	return &Namespace{
 		Name:        namespace,
 		Dimensions:  dimensions,
 		IndexConfig: &indexConfig,
+		Schema:      schema,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
 	}, nil
+}
+
+// EnsureNamespace returns the namespace, creating it if it does not exist.
+func (s *Store) EnsureNamespace(ctx context.Context, namespace string, opts CreateNamespaceOptions) (*Namespace, error) {
+	ns, err := s.GetNamespace(ctx, namespace)
+	if err == nil {
+		return ns, nil
+	}
+	if !IsNotFound(err) {
+		return nil, err
+	}
+	if err := s.CreateNamespace(ctx, namespace, opts); err != nil {
+		return nil, err
+	}
+	return s.GetNamespace(ctx, namespace)
+}
+
+// GetNamespaceStats returns metadata plus an approximate document count.
+func (s *Store) GetNamespaceStats(ctx context.Context, namespace string) (*NamespaceStats, error) {
+	ns, err := s.GetNamespace(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	count, err := s.CountDocuments(ctx, namespace, nil)
+	if err != nil {
+		return nil, err
+	}
+	metric := ""
+	if ns.IndexConfig != nil {
+		metric = ns.IndexConfig.DistanceMetric
+	}
+	return &NamespaceStats{
+		Name:             ns.Name,
+		ApproximateCount: count,
+		Dimensions:       ns.Dimensions,
+		DistanceMetric:   metric,
+		IndexConfig:      ns.IndexConfig,
+		Schema:           ns.Schema,
+		CreatedAt:        ns.CreatedAt,
+		UpdatedAt:        ns.UpdatedAt,
+	}, nil
+}
+
+// GetSchema returns the stored attribute schema, merged with id/vector defaults.
+func (s *Store) GetSchema(ctx context.Context, namespace string) (map[string]interface{}, error) {
+	ns, err := s.GetNamespace(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	metric := "cosine_distance"
+	if ns.IndexConfig != nil && ns.IndexConfig.DistanceMetric != "" {
+		metric = ns.IndexConfig.DistanceMetric
+	}
+	out := map[string]interface{}{
+		"id": map[string]interface{}{"type": "string", "filterable": true},
+	}
+	if ns.Dimensions > 0 {
+		out["vector"] = map[string]interface{}{
+			"type": fmt.Sprintf("[%d]f32", ns.Dimensions),
+			"ann": map[string]interface{}{
+				"distance_metric": metric,
+			},
+		}
+	}
+	for k, v := range ns.Schema {
+		out[k] = v
+	}
+	inferred, err := s.inferAttributeSchema(ctx, namespace, out)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range inferred {
+		if _, exists := out[k]; !exists {
+			out[k] = v
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) inferAttributeSchema(ctx context.Context, namespace string, existing map[string]interface{}) (map[string]interface{}, error) {
+	tableName := SQLIdent(GetNamespaceTableName(s.prefix, namespace))
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT attributes FROM %s WHERE attributes IS NOT NULL LIMIT 256`, tableName))
+	if err != nil {
+		return nil, fmt.Errorf("infer schema: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]interface{}{}
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if len(raw) == 0 {
+			continue
+		}
+		var attrs map[string]interface{}
+		if err := json.Unmarshal(raw, &attrs); err != nil {
+			continue
+		}
+		for k, v := range attrs {
+			if k == "id" || k == "vector" {
+				continue
+			}
+			if _, exists := existing[k]; exists {
+				continue
+			}
+			if _, exists := out[k]; exists {
+				continue
+			}
+			out[k] = map[string]interface{}{
+				"type":       inferJSONType(v),
+				"filterable": true,
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
+func inferJSONType(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return "string"
+	case bool:
+		return "bool"
+	case string:
+		return "string"
+	case json.Number:
+		if _, err := t.Int64(); err == nil {
+			if i, _ := t.Int64(); i >= 0 {
+				return "uint"
+			}
+			return "int"
+		}
+		return "float"
+	case float64:
+		if t == float64(int64(t)) {
+			if t >= 0 {
+				return "uint"
+			}
+			return "int"
+		}
+		return "float"
+	case []interface{}:
+		if len(t) == 0 {
+			return "[]string"
+		}
+		inner := inferJSONType(t[0])
+		if strings.HasPrefix(inner, "[") {
+			return "[]" + inner
+		}
+		return "[]" + inner
+	case map[string]interface{}:
+		return "{}f16"
+	default:
+		return "string"
+	}
+}
+
+// UpdateSchema replaces the stored attribute schema for a namespace.
+func (s *Store) UpdateSchema(ctx context.Context, namespace string, schema map[string]interface{}) error {
+	if _, err := s.GetNamespace(ctx, namespace); err != nil {
+		return err
+	}
+	if schema == nil {
+		schema = map[string]interface{}{}
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return fmt.Errorf("marshal schema: %w", err)
+	}
+	sysTable := SQLIdent(GetSystemTableName(s.prefix, "namespaces"))
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s SET attr_schema = $2, updated_at = NOW() WHERE namespace = $1`, sysTable),
+		namespace, raw)
+	if err != nil {
+		return fmt.Errorf("update schema: %w", err)
+	}
+	return s.applySchemaIndexes(ctx, namespace, schema)
 }

@@ -1,0 +1,81 @@
+name: Official Python correctness
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  official-python:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout turbopg
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Postgres 17 with pgvector and pg_textsearch
+        run: docker build -t turbopg-pg:ci ./docker/postgres
+
+      - name: Start Postgres
+        run: |
+          docker run -d --name turbopg-pg \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=postgres \
+            -p 5432:5432 \
+            turbopg-pg:ci
+          for i in $(seq 1 60); do
+            if docker exec turbopg-pg pg_isready -U postgres -h 127.0.0.1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs turbopg-pg
+          exit 1
+
+      - name: Build and run turbopg-server
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+          TURBOPG_API_KEY: testapikey
+          TURBOPG_ALLOW_INSECURE_API_KEY: "1"
+          TURBOPG_PORT: "8080"
+        run: |
+          make build-server
+          ./bin/turbopg-server &
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null http://127.0.0.1:8080/readyz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server failed to start"
+          exit 1
+
+      - name: Checkout turbopuffer-python
+        uses: actions/checkout@v4
+        with:
+          repository: turbopuffer/turbopuffer-python
+          ref: 07bf1295bf7ca5324a33b2509084b8a2219752a2
+          path: turbopuffer-python
+
+      - name: Run allowlisted official custom tests
+        env:
+          TURBOPUFFER_API_KEY: testapikey
+          TURBOPUFFER_BASE_URL: http://127.0.0.1:8080
+          TURBOPUFFER_PYTHON_DIR: ${{ github.workspace }}/turbopuffer-python
+          PYTHON: python3
+        run: |
+          python3 -m pip install -q -e ./turbopuffer-python pytest pytest-asyncio pytest-xdist numpy
+          bash tests/official-python/run.sh

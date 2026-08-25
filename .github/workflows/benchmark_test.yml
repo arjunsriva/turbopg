@@ -11,113 +11,71 @@ on:
 jobs:
   benchmark-test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: ankane/pgvector:pg15
-        ports:
-          - 5432:5432
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - name: Checkout turbopg repository
         uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.23'
 
-      - name: Check Go version
-        run: go version
+      - name: Build Postgres 17 with pgvector and pg_textsearch
+        run: docker build -t turbopg-pg:ci ./docker/postgres
+
+      - name: Start Postgres
+        run: |
+          docker run -d --name turbopg-pg \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=postgres \
+            -p 5432:5432 \
+            turbopg-pg:ci
+          for i in $(seq 1 60); do
+            if docker exec turbopg-pg pg_isready -U postgres -h 127.0.0.1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs turbopg-pg
+          exit 1
 
       - name: Build turbopg-server
         run: make build-server
 
-      - name: Wait for PostgreSQL to be healthy
-        run: |
-          echo "Waiting for PostgreSQL to start..."
-          # The health check in the service definition should handle this,
-          # but an explicit wait can be added if tests are flaky.
-          # For now, relying on service health check.
-          echo "PostgreSQL seems ready."
-
       - name: Run turbopg-server
         run: |
-          echo "Starting turbopg-server in background..."
           ./bin/turbopg-server &
-          echo "Waiting for turbopg-server to initialize..."
-          sleep 5 # Give the server a few seconds to start up
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null http://127.0.0.1:8080/readyz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server failed to start"
+          exit 1
         env:
-          DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" # Uses localhost as services are mapped to host
-          TURBOPG_API_KEY: "testapikey" # Use a fixed test API key
-          TURBOPG_PORT: "8080" # Default port
-          # TURBOPG_STORE_PREFIX: "tpga_" # Default, can be omitted if server uses it
+          DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+          TURBOPG_API_KEY: "testapikey"
+          TURBOPG_ALLOW_INSECURE_API_KEY: "1"
+          TURBOPG_PORT: "8080"
 
-      - name: Checkout tpuf-benchmark repository
+      - name: Checkout tpuf-benchmark
         uses: actions/checkout@v4
         with:
           repository: turbopuffer/tpuf-benchmark
-          path: tpuf-benchmark # Checkout into a subdirectory named 'tpuf-benchmark'
+          path: tpuf-benchmark
 
-      - name: Run tpuf-benchmark
-        working-directory: ./tpuf-benchmark # Change to the benchmark directory
-        run: |
-          echo "Running tpuf-benchmark smoke test..."
-          # The benchmark tool might need to be built first if it's not runnable directly with `go run`
-          # For now, assuming `go run main.go ...` works or it's a pre-built binary.
-          # Adjust the command based on how tpuf-benchmark is structured.
-          # A simple smoke test: upsert a few vectors, then query them.
-          # This command is an example and needs to be verified against tpuf-benchmark's actual CLI.
-          
-          # Example: Basic upsert and query test
-          # First, try to run the main.go if it's the entry point
-          if [ -f main.go ]; then
-            echo "Attempting to run benchmark using go run main.go..."
-            go run main.go \
-              -endpoint="http://localhost:8080" \
-              -api-key="testapikey" \
-              -namespace="testns-ci" \
-              -upserts-per-sec=10 \
-              -duration=5s \
-              -dimensions=3 \
-              -dataset-size=100 \
-              -queries-per-sec=1 \
-              -query-count=10 \
-              -scenario=default \
-              -skip-cleanup=false # Ensure namespace is cleaned up
-
-            # Add more specific tests if needed, e.g., targeting specific templates
-            # go run main.go -template templates/upsert_default.json.tmpl -endpoint ...
-            # go run main.go -template templates/query_default.json.tmpl -endpoint ...
-
-          else
-            echo "main.go not found in tpuf-benchmark root. Attempting to find and run benchmark executable if it exists."
-            # Add logic here if tpuf-benchmark provides a pre-built binary or a different run script
-            # For example, if there's a 'benchmark' executable:
-            # ./benchmark -endpoint="http://localhost:8080" ...
-            echo "No obvious way to run benchmark found in this basic script. Please adjust."
-            exit 1 # Fail if no run method found
-          fi
-          
-          echo "Benchmark smoke test completed."
+      - name: Build and run tpufbench smoke
+        working-directory: ./tpuf-benchmark
         env:
-          # Environment variables for the benchmark tool itself, if it uses them
-          # For example, if TPUF_HOST and TPUF_API_KEY are used by the benchmark client:
-          # TPUF_HOST: "http://localhost:8080" # Not needed if using -endpoint
-          # TPUF_API_KEY: "testapikey" # Not needed if using -api-key
-          # The benchmark tool seems to prefer CLI flags.
-          # The example uses -endpoint and -api-key which are common.
-          # Renamed -host to -endpoint as seen in tpuf-benchmark's README.
-          # Adjusted some parameters for a quicker smoke test (rps, duration, vectors, queries, dimensions).
-          # Changed -vectors to -dataset-size and -queries to -query-count based on common CLI patterns.
-          # These will need verification from tpuf-benchmark's actual CLI.
-          echo "Environment for benchmark:"
-          echo "Endpoint: http://localhost:8080"
-          echo "API Key: testapikey"
+          TURBOPUFFER_API_KEY: testapikey
+          GOTOOLCHAIN: auto
+        run: |
+          go build -o tpufbench ./cmd/tpufbench
+          ./tpufbench run \
+            --endpoint="http://127.0.0.1:8080" \
+            --duration=8s \
+            --if-nonempty=clear \
+            --namespace-prefix=ci-smoke \
+            ../benchmarks/smoke.toml

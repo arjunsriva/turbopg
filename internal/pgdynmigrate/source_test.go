@@ -397,3 +397,42 @@ func TestPostgresSource_Interface(t *testing.T) {
 		t.Errorf("ReadDown(2): expected identifier '2.down.sql', got %q", identifier)
 	}
 }
+
+func TestPostgresSource_EdgeCases(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.cleanup(t)
+
+	source, err := NewPostgresSource(db.DB, "edge_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Open("postgres://x"); err == nil {
+		t.Fatal("expected open error")
+	}
+	if _, err := WithInstance(db.DB, "edge2_"); err != nil {
+		t.Fatal(err)
+	}
+
+	empty, err := NewPostgresSource(db.DB, "empty_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := empty.First(); err == nil {
+		t.Fatal("expected missing first")
+	}
+	if _, err := empty.Prev(1); err == nil {
+		t.Fatal("expected missing prev")
+	}
+	if _, err := empty.Next(1); err == nil {
+		t.Fatal("expected missing next")
+	}
+	if _, _, err := empty.ReadUp(99); err == nil {
+		t.Fatal("expected missing readup")
+	}
+	if _, _, err := empty.ReadDown(99); err == nil {
+		t.Fatal("expected missing readdown")
+	}
+}
